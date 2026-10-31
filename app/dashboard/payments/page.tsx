@@ -875,7 +875,7 @@ export default function PaymentsPage() {
               </div>
 
               <p className="text-xs text-gray-500">
-                This only records a payment; it does not change the member's expiry date. To extend
+                This only records a payment; it does not change the member&apos;s expiry date. To extend
                 a membership, use the Renew button on the Members page.
               </p>
 
