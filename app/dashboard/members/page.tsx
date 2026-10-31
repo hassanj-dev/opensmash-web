@@ -2,6 +2,7 @@
 import { useLiveRefresh, keepIfSame } from '@/lib/auto-refresh'
 import { useCurrency } from '@/lib/user-context'
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { addMonths, format } from 'date-fns'
 import {
   Users,
@@ -13,12 +14,15 @@ import {
   X,
   AlertTriangle,
   RefreshCw,
-  CheckCircle2
+  CheckCircle2,
+  Clock,
+  XCircle
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Pagination } from '@/components/app/kit'
 import { supabase } from '@/lib/supabase/client'
-import { formatDate } from '@/lib/utils'
+import { formatDate, isExpiringSoon, daysLeftText, daysUntilExpiry, EXPIRING_DAYS } from '@/lib/utils'
 import { PaymentMethod, RenewMemberResult, CreateMemberResult } from '@/types/database'
 import { pkToday } from '@/lib/pk-date'
 import { logAudit } from '@/lib/audit'
@@ -42,7 +46,7 @@ interface Plan {
   is_active: boolean
 }
 
-type MemberStatus = 'Active' | 'Expired' | 'Inactive'
+type MemberStatus = 'Active' | 'Expiring' | 'Expired' | 'Inactive'
 type StatusFilter = 'all' | MemberStatus
 
 interface FormState {
@@ -95,7 +99,7 @@ function calcExpiry(startDate: string, months: number) {
   return format(addMonths(parseDate(startDate), months), 'yyyy-MM-dd')
 }
 
-// Plan ka label sirf duration se: Monthly / Quarterly / Yearly
+// Plan label comes from the duration only: Monthly / Quarterly / Yearly
 function planLabel(plan: Plan) {
   if (plan.duration_months === 1) return 'Monthly'
   if (plan.duration_months === 3) return 'Quarterly'
@@ -106,7 +110,28 @@ function planLabel(plan: Plan) {
 function getStatus(member: Member): MemberStatus {
   if (!member.is_active) return 'Inactive'
   if (!member.expiry_date || member.expiry_date < todayStr()) return 'Expired'
+  // Ends today or tomorrow: staff must notice it at once
+  if (isExpiringSoon(member.expiry_date)) return 'Expiring'
   return 'Active'
+}
+
+// Badge text: "2 days left" / "1 day left" (red). Other statuses show their own name.
+function statusLabel(member: Member, status: MemberStatus) {
+  if (status !== 'Expiring') return status
+  return daysLeftText(member.expiry_date) ?? 'Expiring'
+}
+
+// Small line under the expiry date: "45 days left", "1 day left", "Expired 2 days ago"
+function ExpiryCaption({ member }: { member: Member }) {
+  if (!member.is_active || !member.expiry_date) return null
+  const text = daysLeftText(member.expiry_date)
+  if (!text) return null
+  const n = daysUntilExpiry(member.expiry_date) ?? 0
+  return (
+    <p className={`text-xs ${n <= EXPIRING_DAYS ? 'font-medium text-red-600' : 'text-gray-500'}`}>
+      {text}
+    </p>
+  )
 }
 
 function normalizePhone(phone: string) {
@@ -128,8 +153,22 @@ function dbMessage(err: unknown, fallback: string) {
 
 const statusStyles: Record<MemberStatus, string> = {
   Active: 'bg-green-50 text-green-700 border-green-100',
+  Expiring: 'bg-red-50 text-red-700 border-red-300 font-semibold',
   Expired: 'bg-orange-50 text-orange-700 border-orange-100',
   Inactive: 'bg-gray-100 text-gray-600 border-gray-200'
+}
+
+// Status badge with an icon: clock = ending soon ("1 day left"), cross = expired
+function StatusBadge({ member, status }: { member: Member; status: MemberStatus }) {
+  const Icon = status === 'Expiring' ? Clock : status === 'Expired' ? XCircle : null
+  return (
+    <span
+      className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium ${statusStyles[status]}`}
+    >
+      {Icon && <Icon className="h-3 w-3" aria-hidden="true" />}
+      {statusLabel(member, status)}
+    </span>
+  )
 }
 
 const inputClass =
@@ -155,8 +194,23 @@ async function fetchAllMembers(gymId: string): Promise<Member[]> {
   return all
 }
 
+// Re-renders the page when the Pakistan date changes (midnight), so "1 day left" turns into
+// "Expired" by itself even if the page was left open overnight.
+function useToday() {
+  const [today, setToday] = useState(todayStr())
+  useEffect(() => {
+    const t = setInterval(() => {
+      const now = todayStr()
+      setToday(prev => (prev === now ? prev : now))
+    }, 30_000)
+    return () => clearInterval(t)
+  }, [])
+  return today
+}
+
 export default function MembersPage() {
   const { currency } = useCurrency()
+  const today = useToday()
   const [gymId, setGymId] = useState<string | null>(null)
   const [userId, setUserId] = useState<string | null>(null)
   const [role, setRole] = useState<string | null>(null)
@@ -168,6 +222,10 @@ export default function MembersPage() {
 
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+
+  // Pagination (page 1, 2, 3 ...) - the list is cut into pages on screen only
+  const [page, setPage] = useState(1)
+  const [perPage, setPerPage] = useState(10)
 
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<Member | null>(null)
@@ -210,7 +268,7 @@ export default function MembersPage() {
         .single()
 
       if (userError || !userData?.gym_id) {
-        setError('Aapke account ke saath koi gym linked nahi hai.')
+        setError('No gym is linked to your account.')
         return
       }
 
@@ -233,7 +291,7 @@ export default function MembersPage() {
       setPlans((plansRes.data as Plan[]) || [])
     } catch (err) {
       console.error('Error loading members:', err)
-      setError('Members load nahi ho sake. Dobara koshish karein.')
+      setError('Could not load members. Please try again.')
     } finally {
       setLoading(false)
     }
@@ -244,7 +302,7 @@ export default function MembersPage() {
     void loadData()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-  
+
   // Quiet refresh: picks up changes made on the desktop (sync)
   const refreshData = useCallback(async () => {
     if (!gymId) return
@@ -279,6 +337,7 @@ export default function MembersPage() {
 
   const activePlans = useMemo(() => plans.filter(p => p.is_active), [plans])
 
+  // Search by name, phone or member code (same as the desktop app)
   const filteredMembers = useMemo(() => {
     const q = search.trim().toLowerCase()
     return members.filter(member => {
@@ -286,10 +345,19 @@ export default function MembersPage() {
       if (!q) return true
       return (
         member.name.toLowerCase().includes(q) ||
-        (member.phone || '').toLowerCase().includes(q)
+        (member.phone || '').toLowerCase().includes(q) ||
+        member.code.toLowerCase().includes(q)
       )
     })
-  }, [members, search, statusFilter])
+  }, [members, search, statusFilter, today])
+
+  // If the last page becomes empty (delete / filter), fall back to the last page that exists
+  const totalPages = Math.max(1, Math.ceil(filteredMembers.length / perPage))
+  const currentPage = Math.min(page, totalPages)
+  const pagedMembers = useMemo(
+    () => filteredMembers.slice((currentPage - 1) * perPage, currentPage * perPage),
+    [filteredMembers, currentPage, perPage]
+  )
 
   // Same phone among ACTIVE members is not allowed (desktop rule)
   function findDuplicatePhone(phone: string, excludeId?: string) {
@@ -329,7 +397,7 @@ export default function MembersPage() {
     setFormError(null)
   }
 
-  // Add form: plan badalne par amount mein plan ki price bhar do (tum badal sakte ho)
+  // Add form: when the plan changes, fill the amount with the plan price (you can change it)
   function handlePlanChange(planId: string) {
     const plan = planId ? planMap.get(planId) : undefined
     setForm(f => ({
@@ -345,18 +413,18 @@ export default function MembersPage() {
 
     const name = form.name.trim()
     if (!name) {
-      setFormError('Naam zaroori hai.')
+      setFormError('Name is required.')
       return
     }
     if (!form.startDate) {
-      setFormError(editing ? 'Join date zaroori hai.' : 'Start date zaroori hai.')
+      setFormError(editing ? 'Join date is required.' : 'Start date is required.')
       return
     }
 
     const phone = form.phone.trim()
     const dup = findDuplicatePhone(phone, editing?.id)
     if (dup) {
-      setFormError(`Yeh phone number pehle se ${dup.name} (${dup.code}) ke paas hai.`)
+      setFormError(`This phone number already belongs to ${dup.name} (${dup.code}).`)
       return
     }
 
@@ -365,7 +433,7 @@ export default function MembersPage() {
     // ---------- EDIT: name / phone / join date / expiry date only ----------
     if (editing) {
       if (form.expiryDate && form.expiryDate < form.startDate) {
-        setFormError('Expiry date join date se pehle nahi ho sakti.')
+        setFormError('Expiry date cannot be before the join date.')
         return
       }
 
@@ -385,7 +453,7 @@ export default function MembersPage() {
 
         if (updateError) throw updateError
         if (!data || data.length === 0) {
-          setFormError('Change save nahi hua. Shayad aapko is member ko edit karne ki ijazat nahi.')
+          setFormError('The change was not saved. You may not have permission to edit this member.')
           return
         }
 
@@ -395,11 +463,11 @@ export default function MembersPage() {
         })
         setFormOpen(false)
         setEditing(null)
-        setNotice('Member update ho gaya.')
+        setNotice('Member updated.')
         await loadData()
       } catch (err) {
         console.error('Error saving member:', err)
-        setFormError(dbMessage(err, 'Member save nahi ho saka. Dobara koshish karein.'))
+        setFormError(dbMessage(err, 'Could not save the member. Please try again.'))
       } finally {
         setSaving(false)
       }
@@ -409,14 +477,14 @@ export default function MembersPage() {
     // ---------- ADD: member + payment in ONE database transaction ----------
     const plan = form.planId ? planMap.get(form.planId) : undefined
     if (form.planId && !plan) {
-      setFormError('Yeh plan nahi mila. Dobara select karein.')
+      setFormError('This plan was not found. Please select it again.')
       return
     }
 
     const amountText = form.amount.trim()
     const amount = amountText === '' ? 0 : Number(amountText)
     if (!isValidAmount(amount)) {
-      setFormError('Amount sahi number hona chahiye.')
+      setFormError('Amount must be a valid number.')
       return
     }
 
@@ -444,13 +512,13 @@ export default function MembersPage() {
       setFormOpen(false)
       setNotice(
         result?.receipt_no
-          ? `Member ${result.code} Added Successfully Receipt: ${result.receipt_no}`
-          : `Member ${result?.code ?? ''} Added Successfully.`
+          ? `Member ${result.code} added successfully. Receipt: ${result.receipt_no}`
+          : `Member ${result?.code ?? ''} added successfully.`
       )
       await loadData()
     } catch (err) {
       console.error('Error saving member:', err)
-      setFormError(dbMessage(err, 'Member save nahi ho saka. Dobara koshish karein.'))
+      setFormError(dbMessage(err, 'Could not save the member. Please try again.'))
     } finally {
       setSaving(false)
     }
@@ -501,12 +569,12 @@ export default function MembersPage() {
     if (!gymId || !userId || !renewTarget) return
 
     if (!renewForm.planId) {
-      setRenewError('Plan select karein.')
+      setRenewError('Please select a plan.')
       return
     }
     const amount = Number(renewForm.amount.trim())
     if (!isValidAmount(amount) || amount <= 0) {
-      setRenewError('Amount 0 se zyada sahi number hona chahiye.')
+      setRenewError('Amount must be a valid number greater than 0.')
       return
     }
 
@@ -533,7 +601,7 @@ export default function MembersPage() {
       })
 
       setNotice(
-        `${renewTarget.name} renew ho gaya. Nayi expiry: ${
+        `${renewTarget.name} renewed. New expiry: ${
           result?.expiry_date ? formatDate(result.expiry_date) : '-'
         }. Receipt: ${result?.receipt_no ?? '-'}`
       )
@@ -541,7 +609,7 @@ export default function MembersPage() {
       await loadData()
     } catch (err) {
       console.error('Error renewing member:', err)
-      setRenewError(dbMessage(err, 'Renew nahi ho saka. Dobara koshish karein.'))
+      setRenewError(dbMessage(err, 'Could not renew. Please try again.'))
     } finally {
       setRenewing(false)
     }
@@ -557,7 +625,7 @@ export default function MembersPage() {
     if (!member.is_active) {
       const dup = findDuplicatePhone(member.phone || '', member.id)
       if (dup) {
-        setError(`Active nahi kar sakte: yeh phone ${dup.name} (${dup.code}) ke paas pehle se active hai.`)
+        setError(`Cannot activate: this phone number is already used by active member ${dup.name} (${dup.code}).`)
         return
       }
     }
@@ -572,9 +640,9 @@ export default function MembersPage() {
 
     if (toggleError) {
       console.error('Error toggling member:', toggleError)
-      setError('Status change nahi ho saka. Dobara koshish karein.')
+      setError('Could not change the status. Please try again.')
     } else if (!data || data.length === 0) {
-      setError('Status change nahi hua. Shayad aapko is ki ijazat nahi.')
+      setError('The status was not changed. You may not have permission.')
     } else {
       setMembers(prev =>
         prev.map(m => (m.id === member.id ? { ...m, is_active: !m.is_active } : m))
@@ -587,7 +655,7 @@ export default function MembersPage() {
     setTogglingId(null)
   }
 
-  // ---------- DELETE (soft: member hide hota hai, payments/attendance safe) ----------
+  // ---------- DELETE (soft: the member is hidden, payments/attendance stay safe) ----------
   async function handleDelete() {
     if (!gymId || !userId || !deleteTarget) return
     setDeleting(true)
@@ -604,9 +672,9 @@ export default function MembersPage() {
 
     if (deleteError) {
       console.error('Error deleting member:', deleteError)
-      setError(dbMessage(deleteError, 'Member remove nahi ho saka. Dobara koshish karein.'))
+      setError(dbMessage(deleteError, 'Could not remove the member. Please try again.'))
     } else if (!data || data.length === 0) {
-      setError('Member remove nahi hua. Shayad aapko is ki ijazat nahi.')
+      setError('The member was not removed. You may not have permission.')
     } else {
       setMembers(prev => prev.filter(m => m.id !== deleteTarget.id))
       void logAudit(gymId, userId, 'member_deleted', {
@@ -614,7 +682,7 @@ export default function MembersPage() {
         code: deleteTarget.code,
         name: deleteTarget.name
       })
-      setNotice(`${deleteTarget.name} remove ho gaya. Is ki payments aur attendance history safe hai.`)
+      setNotice(`${deleteTarget.name} removed. Their payments and attendance history are safe.`)
     }
     setDeleting(false)
     setDeleteTarget(null)
@@ -637,6 +705,13 @@ export default function MembersPage() {
       </div>
     )
   }
+
+  // Edit form hint: what the expiry would be if it were simply join date + plan months
+  const editingPlan = editing?.plan_id ? planMap.get(editing.plan_id) : undefined
+  const editingPlanExpiry =
+    editing && editingPlan && form.startDate
+      ? calcExpiry(form.startDate, editingPlan.duration_months)
+      : null
 
   return (
     <div className="space-y-6">
@@ -683,18 +758,25 @@ export default function MembersPage() {
               <input
                 type="text"
                 value={search}
-                onChange={e => setSearch(e.target.value)}
+                onChange={e => {
+                  setSearch(e.target.value)
+                  setPage(1)
+                }}
                 placeholder="Search"
                 className={`${inputClass} pl-9`}
               />
             </div>
             <select
               value={statusFilter}
-              onChange={e => setStatusFilter(e.target.value as StatusFilter)}
+              onChange={e => {
+                setStatusFilter(e.target.value as StatusFilter)
+                setPage(1)
+              }}
               className={`${inputClass} sm:w-48`}
             >
               <option value="all">All</option>
               <option value="Active">Active</option>
+              <option value="Expiring">Expiring</option>
               <option value="Expired">Expired</option>
               <option value="Inactive">Inactive</option>
             </select>
@@ -704,11 +786,12 @@ export default function MembersPage() {
           {filteredMembers.length === 0 ? (
             <p className="text-center text-gray-500 py-8">
               {members.length === 0
-                ? 'Abhi koi member nahi hai. "Add Member" se pehla member add karein.'
-                : 'Search ya filter se koi member nahi mila.'}
+                ? 'No members yet. Use "Add Member" to add your first member.'
+                : 'No members match your search or filter.'}
             </p>
           ) : (
-            <div className="overflow-x-auto">
+            <>
+            <div className="hidden overflow-x-auto md:block">
               <table className="w-full text-left text-sm">
                 <thead>
                   <tr className="border-b border-gray-200 text-xs uppercase text-gray-500">
@@ -722,11 +805,16 @@ export default function MembersPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredMembers.map(member => {
+                  {pagedMembers.map(member => {
                     const status = getStatus(member)
                     const plan = member.plan_id ? planMap.get(member.plan_id) : undefined
                     return (
-                      <tr key={member.id} className="border-b border-gray-100 hover:bg-gray-50">
+                      <tr
+                        key={member.id}
+                        className={`border-b border-gray-100 hover:bg-gray-50 ${
+                          status === 'Expiring' ? 'bg-red-50/60' : ''
+                        }`}
+                      >
                         <td className="px-3 py-3">
                           <p className="font-medium text-gray-900">{member.name}</p>
                           <p className="text-xs text-gray-500">{member.code}</p>
@@ -740,13 +828,10 @@ export default function MembersPage() {
                         </td>
                         <td className="px-3 py-3 text-gray-700">
                           {member.expiry_date ? formatDate(member.expiry_date) : '-'}
+                          <ExpiryCaption member={member} />
                         </td>
                         <td className="px-3 py-3">
-                          <span
-                            className={`inline-block rounded-full border px-2.5 py-0.5 text-xs font-medium ${statusStyles[status]}`}
-                          >
-                            {status}
-                          </span>
+                          <StatusBadge member={member} status={status} />
                         </td>
                         <td className="px-3 py-3">
                           <div className="flex items-center justify-end gap-1">
@@ -754,6 +839,7 @@ export default function MembersPage() {
                               <button
                                 onClick={() => openRenew(member)}
                                 title="Renew"
+                                aria-label="Renew"
                                 className="p-2 rounded-lg text-gray-600 hover:bg-gray-100 hover:text-green-600"
                               >
                                 <RefreshCw className="w-4 h-4" />
@@ -762,7 +848,8 @@ export default function MembersPage() {
                             <button
                               onClick={() => handleToggleActive(member)}
                               disabled={togglingId === member.id}
-                              title={member.is_active ? 'Inactive' : 'Active'}
+                              title={member.is_active ? 'Make inactive' : 'Make active'}
+                              aria-label={member.is_active ? 'Make inactive' : 'Make active'}
                               className="p-2 rounded-lg text-gray-600 hover:bg-gray-100 hover:text-blue-600 disabled:opacity-50"
                             >
                               <Power className="w-4 h-4" />
@@ -770,6 +857,7 @@ export default function MembersPage() {
                             <button
                               onClick={() => openEdit(member)}
                               title="Edit"
+                              aria-label="Edit"
                               className="p-2 rounded-lg text-gray-600 hover:bg-gray-100 hover:text-blue-600"
                             >
                               <Pencil className="w-4 h-4" />
@@ -778,6 +866,7 @@ export default function MembersPage() {
                               <button
                                 onClick={() => setDeleteTarget(member)}
                                 title="Delete"
+                                aria-label="Delete"
                                 className="p-2 rounded-lg text-red-600 hover:bg-red-50"
                               >
                                 <Trash2 className="w-4 h-4" />
@@ -791,13 +880,117 @@ export default function MembersPage() {
                 </tbody>
               </table>
             </div>
+
+            {/* Mobile: every member as a card (same actions as the table row) */}
+            <div className="space-y-3 md:hidden">
+              {pagedMembers.map(member => {
+                const status = getStatus(member)
+                const plan = member.plan_id ? planMap.get(member.plan_id) : undefined
+                return (
+                  <div
+                    key={member.id}
+                    className={`rounded-xl border bg-white p-4 shadow-sm ${
+                      status === 'Expiring' ? 'border-red-300 bg-red-50/60' : 'border-gray-200'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate font-medium text-gray-900">{member.name}</p>
+                        <p className="text-xs text-gray-500">{member.code}</p>
+                      </div>
+                      <StatusBadge member={member} status={status} />
+                    </div>
+
+                    <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
+                      <div>
+                        <dt className="text-xs text-gray-500">Phone</dt>
+                        <dd className="break-all text-gray-800">{member.phone || '-'}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-xs text-gray-500">Plan</dt>
+                        <dd className="text-gray-800">{plan ? planLabel(plan) : 'No plan'}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-xs text-gray-500">Join Date</dt>
+                        <dd className="text-gray-800">
+                          {member.join_date ? formatDate(member.join_date) : '-'}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-xs text-gray-500">Expiry Date</dt>
+                        <dd className="text-gray-800">
+                          {member.expiry_date ? formatDate(member.expiry_date) : '-'}
+                          <ExpiryCaption member={member} />
+                        </dd>
+                      </div>
+                    </dl>
+
+                    <div className="mt-3 flex items-center justify-end gap-1 border-t border-gray-100 pt-3">
+                      {member.is_active && (
+                        <button
+                          onClick={() => openRenew(member)}
+                          title="Renew"
+                          aria-label="Renew"
+                          className="p-2 rounded-lg text-gray-600 hover:bg-gray-100 hover:text-green-600"
+                        >
+                          <RefreshCw className="w-4 h-4" />
+                        </button>
+                      )}
+                      <button
+                        onClick={() => handleToggleActive(member)}
+                        disabled={togglingId === member.id}
+                        title={member.is_active ? 'Make inactive' : 'Make active'}
+                        aria-label={member.is_active ? 'Make inactive' : 'Make active'}
+                        className="p-2 rounded-lg text-gray-600 hover:bg-gray-100 hover:text-blue-600 disabled:opacity-50"
+                      >
+                        <Power className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => openEdit(member)}
+                        title="Edit"
+                        aria-label="Edit"
+                        className="p-2 rounded-lg text-gray-600 hover:bg-gray-100 hover:text-blue-600"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                      {canDelete && (
+                        <button
+                          onClick={() => setDeleteTarget(member)}
+                          title="Delete"
+                          aria-label="Delete"
+                          className="p-2 rounded-lg text-red-600 hover:bg-red-50"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* Only needed once there is more than the smallest page size */}
+            {filteredMembers.length > 10 && (
+              <Pagination
+                className="mt-4"
+                page={currentPage}
+                pageSize={perPage}
+                total={filteredMembers.length}
+                onPageChange={setPage}
+                onPageSizeChange={size => {
+                  setPerPage(size)
+                  setPage(1)
+                }}
+              />
+            )}
+            </>
           )}
         </CardContent>
       </Card>
 
       {/* Add / Edit modal */}
-      {formOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-gray-900/50 p-4">
+      {formOpen && createPortal(
+        <div className="fixed inset-0 z-[60] flex items-center justify-center overflow-y-auto bg-gray-900/50 p-4">
           <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-lg font-bold text-gray-900">
@@ -861,9 +1054,23 @@ export default function MembersPage() {
                       />
                     </div>
                   </div>
+                  {editingPlanExpiry && form.expiryDate !== editingPlanExpiry && (
+                    <p className="-mt-2 text-xs text-amber-700">
+                      Join date + plan = {formatDate(editingPlanExpiry)}, but the expiry date is{' '}
+                      {form.expiryDate ? formatDate(form.expiryDate) : 'empty'}. This is normal after a
+                      renewal.{' '}
+                      <button
+                        type="button"
+                        className="font-medium underline"
+                        onClick={() => setForm(f => ({ ...f, expiryDate: editingPlanExpiry }))}
+                      >
+                        Use it
+                      </button>
+                    </p>
+                  )}
                   <p className="-mt-2 text-xs text-gray-500">
-                    Plan badalne ya membership barhane ke liye list mein Renew button use karein.
-                    Yahan sirf galti theek karne ke liye dates badlein.
+                    To change the plan or extend the membership, use the Renew button in the list.
+                    Change the dates here only to correct a mistake.
                   </p>
                 </>
               ) : (
@@ -884,7 +1091,7 @@ export default function MembersPage() {
                     </select>
                     {plans.length === 0 && (
                       <p className="mt-1 text-xs text-gray-500">
-                        Abhi koi plan nahi hai. Pehle Plans page se plan banayein.
+                        No plans yet. Create a plan from the Plans page first.
                       </p>
                     )}
                   </div>
@@ -944,8 +1151,8 @@ export default function MembersPage() {
                     </div>
                   </div>
                   <p className="-mt-2 text-xs text-gray-500">
-                    Amount likhne par payment record hogi aur revenue mein add hogi. Khali ya 0
-                    chhodein to koi payment nahi banegi.
+                    Entering an amount creates a payment record and adds it to revenue. Leave it
+                    empty or 0 to create no payment.
                   </p>
                 </>
               )}
@@ -966,12 +1173,13 @@ export default function MembersPage() {
               </div>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Renew modal */}
-      {renewTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-gray-900/50 p-4">
+      {renewTarget && createPortal(
+        <div className="fixed inset-0 z-[60] flex items-center justify-center overflow-y-auto bg-gray-900/50 p-4">
           <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-lg font-bold text-gray-900">Renew Membership</h2>
@@ -985,9 +1193,9 @@ export default function MembersPage() {
             </div>
 
             <p className="mb-4 text-sm text-gray-700">
-              <span className="font-medium">{renewTarget.name}</span> ({renewTarget.code}) · abhi ki
+              <span className="font-medium">{renewTarget.name}</span> ({renewTarget.code}) · current
               expiry:{' '}
-              {renewTarget.expiry_date ? formatDate(renewTarget.expiry_date) : 'koi nahi'}
+              {renewTarget.expiry_date ? formatDate(renewTarget.expiry_date) : 'none'}
             </p>
 
             <form onSubmit={handleRenew} className="space-y-4">
@@ -998,7 +1206,7 @@ export default function MembersPage() {
                   onChange={e => handleRenewPlanChange(e.target.value)}
                   className={inputClass}
                 >
-                  <option value="">Plan select karein</option>
+                  <option value="">Select a plan</option>
                   {activePlans.map(plan => (
                     <option key={plan.id} value={plan.id}>
                       {planLabel(plan)}
@@ -1007,8 +1215,8 @@ export default function MembersPage() {
                 </select>
                 {renewPreview && (
                   <p className="mt-1 text-xs text-gray-500">
-                    Nayi expiry: {formatDate(renewPreview)} (aaj ya purani expiry, jo baad ki ho,
-                    wahan se gina jata hai)
+                    New expiry: {formatDate(renewPreview)} (counted from today or the current
+                    expiry, whichever is later)
                   </p>
                 )}
               </div>
@@ -1048,7 +1256,7 @@ export default function MembersPage() {
                 </div>
               </div>
               <p className="-mt-2 text-xs text-gray-500">
-                Expiry aur payment ek saath save hoti hain. Agar ek fail ho to dono nahi banti.
+                Expiry and payment are saved together. If one fails, neither is saved.
               </p>
 
               {renewError && (
@@ -1067,24 +1275,25 @@ export default function MembersPage() {
               </div>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Delete confirm modal */}
-      {deleteTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/50 p-4">
+      {deleteTarget && createPortal(
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-gray-900/50 p-4">
           <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
             <div className="mb-3 flex items-center gap-2">
               <AlertTriangle className="w-5 h-5 text-red-600" />
-              <h2 className="text-lg font-bold text-gray-900">Member remove karein?</h2>
+              <h2 className="text-lg font-bold text-gray-900">Remove member?</h2>
             </div>
             <p className="text-sm text-gray-700">
-              <span className="font-medium">{deleteTarget.name}</span> ({deleteTarget.code}) list se
-              hat jayega. Is ki payments aur attendance history delete nahi hogi, revenue reports
-              waise hi rahengi.
+              <span className="font-medium">{deleteTarget.name}</span> ({deleteTarget.code}) will be
+              removed from the list. Their payments and attendance history will not be deleted, and
+              revenue reports stay the same.
             </p>
             <p className="mt-2 text-xs text-gray-500">
-              Agar sirf member ko rokna hai to remove ki jagah Inactive kar dein.
+              If you only want to stop the member, set them to Inactive instead of removing.
             </p>
             <div className="mt-5 flex justify-end gap-2">
               <Button
@@ -1104,7 +1313,8 @@ export default function MembersPage() {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   )

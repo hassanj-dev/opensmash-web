@@ -43,12 +43,15 @@ export async function proxy(req: NextRequest) {
   const publicRoutes = ['/auth/login', '/auth/signup', '/auth/forgot-password', '/auth/reset-password']
   const isPublicRoute = publicRoutes.some(route => path.startsWith(route))
 
+  // Public front page. Exact match only, so every other path stays protected.
+  const isLanding = path === '/'
+
   // Reset-password par logged-in user ko rokna nahi (recovery link session banata hai,
   // aur must_change_password wale staff ko yahin password badalna hai)
   const isResetRoute = path.startsWith('/auth/reset-password')
 
-  // Login nahi aur protected page => login par bhejo
-  if (!authUser && !isPublicRoute) return redirectTo('/auth/login')
+  // Login nahi aur protected page => login par bhejo (front page is open to visitors)
+  if (!authUser && !isPublicRoute && !isLanding) return redirectTo('/auth/login')
 
   // Login hai aur auth page khola => dashboard (reset-password ko chhor kar)
   if (authUser && isPublicRoute && !isResetRoute) return redirectTo('/dashboard')
@@ -112,5 +115,7 @@ export async function proxy(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)'],
+  matcher: [
+    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|json|webmanifest|txt|xml)$).*)',
+  ],
 }

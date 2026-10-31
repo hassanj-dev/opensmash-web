@@ -4,7 +4,6 @@ import { ReactNode, useState, useEffect, useMemo, useCallback } from 'react'
 import { fetchGymGate } from '@/lib/gym-access'
 import { isRouteAllowed } from '@/lib/route-access'
 import { useRouter, usePathname } from 'next/navigation'
-import Link from 'next/link'
 import {
   LayoutDashboard,
   Users,
@@ -12,16 +11,13 @@ import {
   ClipboardList,
   TrendingUp,
   Settings,
-  LogOut,
-  Menu,
-  X,
-  Dumbbell,
   FileText,
   DollarSign,
   Shield,
   UserCog
 } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import AppShell, { ShellNavItem } from '@/components/app/AppShell'
+import { ToastProvider } from '@/components/app/kit'
 import { signOut } from '@/lib/auth'
 import { supabase } from '@/lib/supabase/client'
 import { User } from '@/types/database'
@@ -35,7 +31,6 @@ interface DashboardLayoutProps {
 export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const router = useRouter()
   const pathname = usePathname()
-  const [sidebarOpen, setSidebarOpen] = useState(false)
   const [user, setUser] = useState<User | null>(null)
   const [gymName, setGymName] = useState('IronGym')
   const [currency, setCurrency] = useState('Rs')
@@ -69,6 +64,17 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     }
     fetchUser()
   }, [])
+
+  // Settings page tells the layout when the profile picture changed (no reload needed)
+  useEffect(() => {
+    const onAvatar = (e: Event) => {
+      const url = (e as CustomEvent<string | null>).detail ?? null
+      setUser(u => (u ? { ...u, avatar_url: url } : u))
+    }
+    window.addEventListener('avatar-changed', onAvatar)
+    return () => window.removeEventListener('avatar-changed', onAvatar)
+  }, [])
+
   const userRole = user?.role
   const userGymId = user?.gym_id
 
@@ -134,8 +140,8 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     router.refresh()
   }
 
-  const navItems = [
-    { icon: LayoutDashboard, label: 'Dashboard', href: '/dashboard' },
+  const navItems: ShellNavItem[] = [
+    { icon: LayoutDashboard, label: 'Dashboard', href: '/dashboard', exact: true },
     { icon: Users, label: 'Members', href: '/dashboard/members' },
     { icon: CreditCard, label: 'Payments', href: '/dashboard/payments' },
     { icon: ClipboardList, label: 'Attendance', href: '/dashboard/attendance' },
@@ -160,98 +166,22 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
 
   return (
     <UserProvider value={ctxValue}>
-      <div className="min-h-screen bg-gray-50">
-        {/* Mobile sidebar backdrop */}
-        {sidebarOpen && (
-          <div
-            className="fixed inset-0 bg-gray-900/50 z-40 lg:hidden"
-            onClick={() => setSidebarOpen(false)}
-          />
-        )}
-
-        {/* Sidebar */}
-        <aside
-          className={`fixed top-0 left-0 z-40 h-screen w-64 bg-white border-r border-gray-200 transition-transform duration-300 ease-in-out lg:translate-x-0 ${
-            sidebarOpen ? 'translate-x-0' : '-translate-x-full'
-          }`}
+      <ToastProvider>
+        <AppShell
+          navItems={navItems}
+          workspaceName={gymName}
+          workspaceRole={user?.role?.replace('_', ' ')}
+          user={
+            user
+              ? { name: user.full_name, email: user.email, avatarUrl: user.avatar_url }
+              : null
+          }
+          onSignOut={handleLogout}
         >
-          <div className="flex flex-col h-full">
-            {/* Logo */}
-            <div className="flex items-center justify-between p-6 border-b border-gray-200">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center">
-                  <Dumbbell className="w-6 h-6 text-white" />
-                </div>
-                <div>
-                  <h2 className="font-bold text-gray-900">{gymName}</h2>
-                  {user && <p className="text-xs text-gray-500">{user.role.replace('_', ' ')}</p>}
-                </div>
-              </div>
-              <button
-                onClick={() => setSidebarOpen(false)}
-                className="lg:hidden p-1 rounded-lg hover:bg-gray-100"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Navigation */}
-            <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-              {navItems.map((item) => (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  onClick={() => setSidebarOpen(false)}
-                  className="flex w-full items-center gap-3 px-4 py-3 rounded-lg text-gray-700 hover:bg-gray-100 hover:text-blue-600 transition-colors"
-                >
-                  <item.icon className="w-5 h-5" />
-                  <span className="font-medium">{item.label}</span>
-                </Link>
-              ))}
-            </nav>
-
-            {/* User section */}
-            <div className="p-4 border-t border-gray-200">
-              <div className="mb-3 px-4 py-2 bg-gray-50 rounded-lg">
-                <p className="text-sm font-medium text-gray-900">{user?.full_name || 'User'}</p>
-                <p className="text-xs text-gray-500">{user?.email}</p>
-              </div>
-              <Button
-                variant="outline"
-                className="w-full justify-start text-red-600 hover:text-red-700 hover:bg-red-50"
-                onClick={handleLogout}
-              >
-                <LogOut className="w-4 h-4 mr-2" />
-                Sign Out
-              </Button>
-            </div>
-          </div>
-        </aside>
-
-        {/* Main content */}
-        <div className="lg:pl-64">
-          {/* Top bar */}
-          <header className="sticky top-0 z-30 bg-white border-b border-gray-200">
-            <div className="flex items-center justify-between px-4 py-4">
-              <button
-                onClick={() => setSidebarOpen(true)}
-                className="p-2 rounded-lg hover:bg-gray-100 lg:hidden"
-              >
-                <Menu className="w-6 h-6" />
-              </button>
-              <div className="flex-1 lg:hidden" />
-              <div className="flex items-center gap-4">
-                <span className="text-sm text-gray-600">Welcome back, {user?.full_name?.split(' ')[0] || 'User'}!</span>
-              </div>
-            </div>
-          </header>
-
           {/* Page content (not rendered for a blocked route, so it never fetches data) */}
-          <main className="p-6">
-            {routeBlocked ? null : children}
-          </main>
-        </div>
-      </div>
+          {routeBlocked ? null : children}
+        </AppShell>
+      </ToastProvider>
     </UserProvider>
   )
 }

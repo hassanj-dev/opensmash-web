@@ -1,6 +1,6 @@
 'use client'
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Layers, Plus, Pencil, Trash2, Power, X, AlertTriangle, CheckCircle2 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -37,6 +37,12 @@ function planLabel(months: number) {
   return durationOptions.find(o => o.months === months)?.label || `${months} months`
 }
 
+function duplicateMessage(months: number, isActive: boolean) {
+  return `A ${planLabel(months)} plan already exists${
+    isActive ? '' : ' (Inactive)'
+  }. Edit it or set it to Active.`
+}
+
 const inputClass =
   'w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600'
 
@@ -58,6 +64,9 @@ export default function PlansPage() {
   const [deleteTarget, setDeleteTarget] = useState<Plan | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [togglingId, setTogglingId] = useState<string | null>(null)
+  const [showInactive, setShowInactive] = useState(false)
+  // Blocks a second submit (double click / Enter) before React re-renders `saving`
+  const savingRef = useRef(false)
 
   const loadData = useCallback(async () => {
     setError(null)
@@ -66,7 +75,7 @@ export default function PlansPage() {
         data: { user }
       } = await supabase.auth.getUser()
       if (!user) {
-        setError('Aap login nahi hain. Dobara login karein.')
+        setError('You are not logged in. Please log in again.')
         return
       }
       setUserId(user.id)
@@ -78,7 +87,7 @@ export default function PlansPage() {
         .single()
 
       if (userError || !userData?.gym_id) {
-        setError('Aapke account ke saath koi gym linked nahi hai.')
+        setError('No gym is linked to your account.')
         return
       }
 
@@ -95,7 +104,7 @@ export default function PlansPage() {
       setPlans((data as Plan[]) || [])
     } catch (err) {
       console.error('Error loading plans:', err)
-      setError('Plans load nahi ho sake. Dobara koshish karein.')
+      setError('Plans could not be loaded. Please try again.')
     } finally {
       setLoading(false)
     }
@@ -133,6 +142,17 @@ export default function PlansPage() {
     () => [...plans].sort((a, b) => a.duration_months - b.duration_months),
     [plans]
   )
+  const activePlans = useMemo(() => sortedPlans.filter(p => p.is_active), [sortedPlans])
+  const inactiveCount = sortedPlans.length - activePlans.length
+  const visiblePlans = showInactive ? sortedPlans : activePlans
+  // Duplicates that already exist in the database (e.g. created by sync): flag them so they can be removed
+  const duplicateLabels = useMemo(() => {
+    const counts = new Map<number, number>()
+    activePlans.forEach(p => counts.set(p.duration_months, (counts.get(p.duration_months) || 0) + 1))
+    return Array.from(counts.entries())
+      .filter(([, count]) => count > 1)
+      .map(([months, count]) => `${planLabel(months)} (${count})`)
+  }, [activePlans])
 
   function openAdd() {
     // Start on the first duration that has no plan yet
@@ -159,35 +179,50 @@ export default function PlansPage() {
 
   async function handleSave(e: FormEvent) {
     e.preventDefault()
-    if (!gymId || !userId) return
+    if (!gymId || !userId || savingRef.current) return
 
     const months = Number(form.duration)
     const price = Number(form.price)
 
     if (!durationOptions.some(o => o.months === months)) {
-      setFormError('Duration select karein.')
+      setFormError('Please select a duration.')
       return
     }
     if (form.price.trim() === '' || !Number.isFinite(price) || price < 0 || price > MAX_PRICE) {
-      setFormError('Price sahi number honi chahiye.')
+      setFormError('Price must be a valid number.')
       return
     }
 
     // One plan per duration (the members screens label plans by duration only)
     const sameDuration = plans.find(p => p.duration_months === months && p.id !== editing?.id)
     if (sameDuration) {
-      setFormError(
-        `${planLabel(months)} plan pehle se maujood hai${
-          sameDuration.is_active ? '' : ' (Inactive)'
-        }. Us ko edit ya Active karein.`
-      )
+      setFormError(duplicateMessage(months, sameDuration.is_active))
+      if (!sameDuration.is_active) setShowInactive(true)
       return
     }
 
+    savingRef.current = true
     setSaving(true)
     setFormError(null)
 
     try {
+      // The list on screen can be stale (sync / another user), so check the database itself too
+      const { data: existing, error: existingError } = await supabase
+        .from('plans')
+        .select('id, is_active')
+        .eq('gym_id', gymId)
+        .eq('duration_months', months)
+      if (existingError) throw existingError
+      const clash = ((existing as { id: string; is_active: boolean }[] | null) || []).find(
+        p => p.id !== editing?.id
+      )
+      if (clash) {
+        setFormError(duplicateMessage(months, clash.is_active))
+        if (!clash.is_active) setShowInactive(true)
+        await refreshPlans()
+        return
+      }
+
       const payload = {
         name: planLabel(months),
         duration_months: months,
@@ -203,7 +238,7 @@ export default function PlansPage() {
           .select('id')
         if (updateError) throw updateError
         if (!data || data.length === 0) {
-          setFormError('Change save nahi hua. Sirf owner ya manager plan badal sakta hai.')
+          setFormError('The change was not saved. Only the owner or a manager can change plans.')
           return
         }
         void logAudit(gymId, userId, 'plan_updated', {
@@ -230,8 +265,9 @@ export default function PlansPage() {
       await loadData()
     } catch (err) {
       console.error('Error saving plan:', err)
-      setFormError('Plan save nahi ho saka. Dobara koshish karein.')
+      setFormError('The plan could not be saved. Please try again.')
     } finally {
+      savingRef.current = false
       setSaving(false)
     }
   }
@@ -242,7 +278,31 @@ export default function PlansPage() {
     setError(null)
     setNotice(null)
 
-    const { data, error: toggleError } = await supabase
+    if (!plan.is_active) {
+      // Activating must not leave two active plans for the same duration
+      const { data: dupes, error: dupError } = await supabase
+        .from('plans')
+        .select('id')
+        .eq('gym_id', gymId)
+        .eq('duration_months', plan.duration_months)
+        .eq('is_active', true)
+        .neq('id', plan.id)
+      if (dupError) {
+        console.error('Error checking plans:', dupError)
+        setError('The status could not be changed. Please try again.')
+        setTogglingId(null)
+        return
+      }
+      if (dupes && dupes.length > 0) {
+        setError(
+          `An active ${planLabel(plan.duration_months)} plan already exists. Set it to Inactive first.`
+        )
+        setTogglingId(null)
+        return
+      }
+    }
+
+    const { data: toggleData, error: toggleError } = await supabase
       .from('plans')
       .update({ is_active: !plan.is_active })
       .eq('id', plan.id)
@@ -251,9 +311,9 @@ export default function PlansPage() {
 
     if (toggleError) {
       console.error('Error toggling plan:', toggleError)
-      setError('Status change nahi ho saka. Dobara koshish karein.')
-    } else if (!data || data.length === 0) {
-      setError('Status change nahi hua. Sirf owner ya manager plan badal sakta hai.')
+      setError('The status could not be changed. Please try again.')
+    } else if (!toggleData || toggleData.length === 0) {
+      setError('The status was not changed. Only the owner or a manager can change plans.')
     } else {
       setPlans(prev => prev.map(p => (p.id === plan.id ? { ...p, is_active: !p.is_active } : p)))
       void logAudit(gymId, userId, plan.is_active ? 'plan_deactivated' : 'plan_activated', {
@@ -280,9 +340,9 @@ export default function PlansPage() {
 
     if (deleteError) {
       console.error('Error removing plan:', deleteError)
-      setError('Plan remove nahi ho saka. Dobara koshish karein.')
+      setError('The plan could not be removed. Please try again.')
     } else if (!data || data.length === 0) {
-      setError('Plan remove nahi hua. Sirf owner ya manager plan badal sakta hai.')
+      setError('The plan was not removed. Only the owner or a manager can change plans.')
     } else {
       setPlans(prev => prev.map(p => (p.id === deleteTarget.id ? { ...p, is_active: false } : p)))
       void logAudit(gymId, userId, 'plan_deactivated', {
@@ -290,7 +350,9 @@ export default function PlansPage() {
         duration_months: deleteTarget.duration_months,
         price: Number(deleteTarget.price)
       })
-      setNotice(`${planLabel(deleteTarget.duration_months)} plan remove ho gaya (Inactive).`)
+      setNotice(
+        `${planLabel(deleteTarget.duration_months)} plan removed. It is now hidden from the list; use "Show inactive" to see it.`
+      )
     }
     setDeleting(false)
     setDeleteTarget(null)
@@ -347,21 +409,43 @@ export default function PlansPage() {
         </div>
       )}
 
+      {duplicateLabels.length > 0 && (
+        <div className="flex items-start gap-2 rounded-lg border border-amber-100 bg-amber-50 p-3 text-sm text-amber-800">
+          <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+          <span>
+            Duplicate active plans found: {duplicateLabels.join(', ')}. Remove the extra plan.
+          </span>
+        </div>
+      )}
+
       <Card className="border-0 shadow-lg">
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Layers className="w-5 h-5 text-blue-600" />
-            All Plans ({sortedPlans.length})
-          </CardTitle>
+          <div className="flex items-center justify-between gap-2">
+            <CardTitle className="flex items-center gap-2">
+              <Layers className="w-5 h-5 text-blue-600" />
+              All Plans ({visiblePlans.length})
+            </CardTitle>
+            {inactiveCount > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowInactive(v => !v)}
+                className="rounded-lg px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 hover:text-blue-600"
+              >
+                {showInactive ? 'Hide inactive' : `Show inactive (${inactiveCount})`}
+              </button>
+            )}
+          </div>
         </CardHeader>
         <CardContent>
-          {sortedPlans.length === 0 ? (
+          {visiblePlans.length === 0 ? (
             <p className="text-center text-gray-500 py-8">
-              Abhi koi plan nahi hai. &quot;Add Plan&quot; se pehla plan banayein.
+              {sortedPlans.length > 0
+                ? 'No active plans. Click "Show inactive" to see older plans.'
+                : <>No plans yet. Create your first plan with &quot;Add Plan&quot;.</>}
             </p>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
+              <table className="w-full min-w-[620px] text-left text-sm">
                 <thead>
                   <tr className="border-b border-gray-200 text-xs uppercase text-gray-500">
                     <th className="px-3 py-3 font-medium">Plan</th>
@@ -372,8 +456,11 @@ export default function PlansPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedPlans.map(plan => (
-                    <tr key={plan.id} className="border-b border-gray-100 hover:bg-gray-50">
+                  {visiblePlans.map(plan => (
+                    <tr
+                      key={plan.id}
+                      className={`border-b border-gray-100 hover:bg-gray-50${plan.is_active ? '' : ' opacity-60'}`}
+                    >
                       <td className="px-3 py-3 font-medium text-gray-900">
                         {planLabel(plan.duration_months)}
                       </td>
@@ -399,7 +486,7 @@ export default function PlansPage() {
                           <button
                             onClick={() => handleToggleActive(plan)}
                             disabled={togglingId === plan.id}
-                            title={plan.is_active ? 'Inactive karein' : 'Active karein'}
+                            title={plan.is_active ? 'Set to Inactive' : 'Set to Active'}
                             className="p-2 rounded-lg text-gray-600 hover:bg-gray-100 hover:text-blue-600 disabled:opacity-50"
                           >
                             <Power className="w-4 h-4" />
@@ -411,13 +498,15 @@ export default function PlansPage() {
                           >
                             <Pencil className="w-4 h-4" />
                           </button>
-                          <button
-                            onClick={() => setDeleteTarget(plan)}
-                            title="Remove"
-                            className="p-2 rounded-lg text-red-600 hover:bg-red-50"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          {plan.is_active && (
+                            <button
+                              onClick={() => setDeleteTarget(plan)}
+                              title="Remove"
+                              className="p-2 rounded-lg text-red-600 hover:bg-red-50"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -476,7 +565,7 @@ export default function PlansPage() {
                   placeholder="3000"
                 />
                 <p className="mt-1 text-xs text-gray-500">
-                  Price badalne se purane members ki payments par koi asar nahi parta.
+                  Changing the price does not affect payments already made by existing members.
                 </p>
               </div>
 
@@ -501,17 +590,16 @@ export default function PlansPage() {
 
       {/* Remove (= Inactive) confirm modal */}
       {deleteTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/50 p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-gray-900/50 p-4">
           <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
             <div className="mb-3 flex items-center gap-2">
               <AlertTriangle className="w-5 h-5 text-red-600" />
-              <h2 className="text-lg font-bold text-gray-900">Plan remove karein?</h2>
+              <h2 className="text-lg font-bold text-gray-900">Remove plan?</h2>
             </div>
             <p className="text-sm text-gray-700">
               <span className="font-medium">{planLabel(deleteTarget.duration_months)}</span> plan
-              ({fmt(Number(deleteTarget.price))}) Inactive ho jayega. Naye members ke
-              liye nazar nahi aayega, purani history safe rahegi. Aap ise baad mein Active kar
-              sakte hain.
+              ({fmt(Number(deleteTarget.price))}) will be set to Inactive. It will no longer be shown
+              for new members, and past history stays safe. You can set it back to Active later.
             </p>
             <div className="mt-5 flex justify-end gap-2">
               <Button

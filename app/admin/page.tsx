@@ -4,7 +4,6 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { format, subMonths } from 'date-fns'
 import {
-  Shield,
   Search,
   Check,
   ChevronDown,
@@ -12,7 +11,6 @@ import {
   ChevronRight,
   Pencil,
   Trash2,
-  X,
   AlertTriangle,
   Building2,
   Wallet,
@@ -20,10 +18,26 @@ import {
   CheckCircle,
   Plus,
   Copy,
-  LogOut
+  LayoutDashboard,
+  BarChart3,
+  CalendarClock
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import Logo from '@/components/Logo'
+import AppShell, { Avatar, ShellNavItem } from '@/components/app/AppShell'
+import {
+  PageHeader,
+  StatCard,
+  StatusPill,
+  EmptyState,
+  Skeleton,
+  Modal,
+  ToastProvider,
+  useToast,
+  PillTone
+} from '@/components/app/kit'
 import { supabase } from '@/lib/supabase/client'
 import { signOut } from '@/lib/auth'
 import { formatCurrency, formatDate } from '@/lib/utils'
@@ -55,6 +69,16 @@ interface Subscription {
 }
 
 type TabKey = 'all' | 'active' | 'pending' | 'suspended' | 'unpaid'
+type SectionKey = 'overview' | 'gyms' | 'revenue'
+
+interface NavDef {
+  label: string
+  icon: ShellNavItem['icon']
+  key: SectionKey
+  target: string // element id to scroll to ('top' = page top)
+  tab?: TabKey
+  badge?: number
+}
 
 interface FeeForm {
   month: string // yyyy-MM
@@ -73,27 +97,37 @@ interface ConfirmState {
   onConfirm: (reason: string, expiryISO: string | null) => Promise<void>
 }
 
+interface AttentionItem {
+  gym: GymRow
+  kind: 'pending' | 'expired' | 'expiring'
+  rank: number
+  label: string
+}
+
+interface AdminUser {
+  name: string | null
+  email: string | null
+  avatarUrl: string | null
+}
+
 const PAGE_SIZE = 8
 const MAX_AMOUNT = 1_000_000_000
+const EXPIRY_WARNING_DAYS = 14
 
 const GYM_COLUMNS =
   'id, name, owner_name, owner_email, phone, status, created_at, suspended_at, suspended_reason, expires_at, license_key'
 
-// Style tokens (Tailwind classes only)
-const statusStyles: Record<string, { badge: string; dot: string }> = {
-  active: { badge: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20', dot: 'bg-emerald-500' },
-  pending: { badge: 'bg-amber-50 text-amber-700 ring-amber-600/20', dot: 'bg-amber-500' },
-  suspended: { badge: 'bg-red-50 text-red-700 ring-red-600/20', dot: 'bg-red-500' },
-  inactive: { badge: 'bg-gray-100 text-gray-600 ring-gray-500/20', dot: 'bg-gray-400' }
+const statusTone: Record<string, PillTone> = {
+  active: 'success',
+  pending: 'warning',
+  suspended: 'danger',
+  inactive: 'neutral'
 }
 
-const inputClass =
-  'w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm transition placeholder:text-gray-400 hover:border-gray-300 focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/20'
-
 const iconBtnClass =
-  'rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600'
+  'rounded-lg p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand'
 
-const bannerBase = 'flex items-start gap-2 rounded-xl border p-3 text-sm'
+const bannerBase = 'flex items-start gap-2 rounded-2xl border p-3.5 text-sm'
 
 function parseMonthKey(value: string) {
   const [y, m] = value.split('-').map(Number)
@@ -109,12 +143,24 @@ const expiryToISO = (dateStr: string) => pkDayStartISO(pkAddDays(dateStr, 1))
 const isoToPkDate = (iso: string) => pkToday(new Date(new Date(iso).getTime() - 60_000))
 const isPast = (iso: string | null) => !!iso && new Date(iso).getTime() <= Date.now()
 const expiryLabel = (iso: string | null) => (iso ? formatDate(isoToPkDate(iso)) : 'No expiry')
+const daysLeft = (iso: string) => (new Date(iso).getTime() - Date.now()) / 86_400_000
 
 export default function AdminPage() {
+  // Toasts need a provider; the admin page is not inside the dashboard layout
+  return (
+    <ToastProvider>
+      <AdminDashboard />
+    </ToastProvider>
+  )
+}
+
+function AdminDashboard() {
   const router = useRouter()
+  const toast = useToast()
 
   const [allowed, setAllowed] = useState(false)
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
+  const [adminUser, setAdminUser] = useState<AdminUser | null>(null)
   const [gyms, setGyms] = useState<GymRow[]>([])
   const [subs, setSubs] = useState<Subscription[]>([])
   const [loading, setLoading] = useState(true)
@@ -140,7 +186,7 @@ export default function AdminPage() {
   const [confirmBusy, setConfirmBusy] = useState(false)
   const [expiryDate, setExpiryDate] = useState('')
   const [confirmError, setConfirmError] = useState<string | null>(null)
-  const [copiedId, setCopiedId] = useState<string | null>(null)
+  const [section, setSection] = useState<SectionKey>('overview')
 
   const monthKey = `${month}-01`
 
@@ -157,7 +203,7 @@ export default function AdminPage() {
 
       const { data: me, error: meError } = await supabase
         .from('users')
-        .select('id, role')
+        .select('id, role, full_name, email, avatar_url')
         .eq('id', user.id)
         .single()
 
@@ -171,6 +217,11 @@ export default function AdminPage() {
       }
 
       setCurrentUserId(user.id)
+      setAdminUser({
+        name: me.full_name ?? null,
+        email: me.email ?? user.email ?? null,
+        avatarUrl: me.avatar_url ?? null
+      })
       setAllowed(true)
 
       const [gymsRes, subsRes] = await Promise.all([
@@ -211,11 +262,11 @@ export default function AdminPage() {
       .order('created_at', { ascending: false })
     if (gymsError) {
       console.error('Error reloading gyms:', gymsError)
-      setError('The gyms list could not be reloaded. Please try again.')
+      toast.error('The gyms list could not be reloaded. Please try again.')
       return
     }
     setGyms((data as GymRow[]) || [])
-  }, [])
+  }, [toast])
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -381,9 +432,11 @@ export default function AdminPage() {
         'Gym fee saved',
         `${monthLabel(feeForm.month)}: ${amount} (${feeForm.paid ? 'paid' : 'unpaid'})`
       )
+      const savedName = feeGym.name
       setFeeGym(null)
       setFeeSub(null)
       await loadData()
+      toast.success(`Fee saved for ${savedName}.`)
     } catch (err) {
       console.error('Error saving fee:', err)
       setFeeError('The fee could not be saved. Please try again.')
@@ -394,7 +447,6 @@ export default function AdminPage() {
 
   async function setPaid(gym: GymRow, sub: Subscription, paid: boolean) {
     setBusyId(gym.id)
-    setError(null)
     try {
       const paidAt = paid ? new Date().toISOString() : null
       const { data: changed, error: updateError } = await supabase
@@ -413,9 +465,10 @@ export default function AdminPage() {
         paid ? 'Gym fee marked paid' : 'Gym fee marked unpaid',
         monthLabel(sub.billing_month.slice(0, 7))
       )
+      toast.success(paid ? `${gym.name} marked as paid.` : `${gym.name} marked as unpaid.`)
     } catch (err) {
       console.error('Error updating payment:', err)
-      setError('The payment status could not be changed. Please try again.')
+      toast.error('The payment status could not be changed. Please try again.')
     } finally {
       setBusyId(null)
     }
@@ -463,9 +516,10 @@ export default function AdminPage() {
           if (!removed || removed.length === 0) throw new Error('Delete was blocked (0 rows)')
           setSubs(prev => prev.filter(s => s.id !== sub.id))
           await logAction(gym.id, 'Gym fee deleted', monthLabel(sub.billing_month.slice(0, 7)))
+          toast.success('Fee record deleted.')
         } catch (err) {
           console.error('Error deleting fee:', err)
-          setError('The fee record could not be deleted. Please try again.')
+          toast.error('The fee record could not be deleted. Please try again.')
         }
       }
     })
@@ -479,7 +533,6 @@ export default function AdminPage() {
     why: string,
     newExpiryISO: string | null
   ) {
-    setError(null)
     try {
       const suspending = newStatus === 'suspended'
       // Suspend changes ONLY status, suspended_at, suspended_reason.
@@ -512,9 +565,10 @@ export default function AdminPage() {
             }`
       )
       await loadGyms()
+      toast.success(`${gym.name} is now ${newStatus}.`)
     } catch (err) {
       console.error('Error updating gym status:', err)
-      setError('The gym status could not be changed. Please try again.')
+      toast.error('The gym status could not be changed. Please try again.')
     }
   }
 
@@ -551,7 +605,6 @@ export default function AdminPage() {
       confirmLabel: 'Save',
       expiry: 'optional',
       onConfirm: async (_why, expiryISO) => {
-        setError(null)
         try {
           const { data: changed, error: updateError } = await supabase
             .from('gyms')
@@ -567,9 +620,10 @@ export default function AdminPage() {
             `${expiryLabel(gym.expires_at)} -> ${expiryLabel(expiryISO)}`
           )
           await loadGyms()
+          toast.success('License expiry saved.')
         } catch (err) {
           console.error('Error setting expiry:', err)
-          setError('The license expiry could not be saved. Please try again.')
+          toast.error('The license expiry could not be saved. Please try again.')
         }
       }
     })
@@ -579,13 +633,26 @@ export default function AdminPage() {
     if (!gym.license_key) return
     try {
       await navigator.clipboard.writeText(gym.license_key)
-      setCopiedId(gym.id)
-      window.setTimeout(() => setCopiedId(id => (id === gym.id ? null : id)), 2000)
+      toast.success('License key copied.')
       await logAction(gym.id, 'License key copied', gym.name)
     } catch (err) {
       console.error('Error copying key:', err)
-      setError('The key could not be copied. Select it and copy it manually.')
+      toast.error('The key could not be copied. Select it and copy it manually.')
     }
+  }
+
+  async function handleSignOut() {
+    await signOut()
+    router.push('/auth/login')
+    router.refresh()
+  }
+
+  function cancelConfirm() {
+    if (confirmBusy) return
+    setConfirmState(null)
+    setReason('')
+    setExpiryDate('')
+    setConfirmError(null)
   }
 
   async function runConfirm() {
@@ -619,762 +686,830 @@ export default function AdminPage() {
     }
   }
 
+  // ---------- Loading / not allowed (no admin chrome is shown until the role is verified) ----------
+
   if (loading || !allowed) {
     return (
-      <div className="min-h-screen bg-gray-50">
-        <div className="mx-auto w-full max-w-7xl space-y-6 px-4 py-6 sm:px-6 sm:py-8 lg:px-8 lg:py-10">
-          <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-600 text-white shadow-sm shadow-blue-600/30">
-              <Shield className="w-5 h-5" />
-            </div>
-            <h1 className="text-2xl font-semibold tracking-tight text-gray-900">Super Admin</h1>
-          </div>
+      <div className="min-h-screen bg-canvas">
+        <div className="mx-auto w-full max-w-6xl space-y-6 px-4 py-8 sm:px-6 lg:px-8">
+          <Logo dark={false} tile href="/dashboard" />
           {error ? (
-            <div className={`${bannerBase} border-red-100 bg-red-50 text-red-700`}>
-              <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+            <div role="alert" className={`${bannerBase} border-red-100 bg-red-50 text-red-700`}>
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
               <span>{error}</span>
             </div>
           ) : (
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4 animate-pulse">
-              {[1, 2, 3, 4].map(i => (
-                <div key={i} className="h-32 rounded-2xl bg-gray-200/60" />
-              ))}
-            </div>
+            <>
+              <Skeleton className="h-9 w-56" />
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                {[1, 2, 3, 4].map(i => (
+                  <Skeleton key={i} className="h-[138px] rounded-2xl" />
+                ))}
+              </div>
+              <Skeleton className="h-72 rounded-2xl" />
+            </>
           )}
         </div>
       </div>
     )
   }
 
-  const statCards = [
-    {
-      title: 'Total Gyms',
-      value: String(stats.total),
-      subtitle: `${stats.active} active, ${stats.suspended} suspended`,
-      icon: Building2,
-      color: 'text-blue-600',
-      bgColor: 'bg-blue-50'
-    },
-    {
-      title: `Collected (${monthLabel(month)})`,
-      value: formatCurrency(stats.collected),
-      subtitle: 'Fees marked as paid',
-      icon: CheckCircle,
-      color: 'text-green-600',
-      bgColor: 'bg-green-50'
-    },
-    {
-      title: `Outstanding (${monthLabel(month)})`,
-      value: formatCurrency(stats.due),
-      subtitle: `${stats.unpaidGyms} gyms have not paid yet`,
-      icon: Wallet,
-      color: 'text-orange-600',
-      bgColor: 'bg-orange-50'
-    },
-    {
-      title: 'Pending Approval',
-      value: String(stats.pending),
-      subtitle: 'New gyms awaiting approval',
-      icon: Clock,
-      color: 'text-yellow-600',
-      bgColor: 'bg-yellow-50'
+  // ---------- Derived data for the page ----------
+
+  const statusRows = [
+    { label: 'Active', count: stats.active, dot: 'bg-emerald-500' },
+    { label: 'Pending', count: stats.pending, dot: 'bg-amber-400' },
+    { label: 'Suspended', count: stats.suspended, dot: 'bg-red-500' }
+  ]
+  const paidGyms = stats.total - stats.unpaidGyms
+  const paidPct = stats.total ? Math.round((paidGyms / stats.total) * 100) : 0
+
+  // Gyms that need a decision: waiting for approval, or license ended / ending soon
+  const attention: AttentionItem[] = []
+  for (const g of gyms) {
+    if (g.status === 'pending') {
+      attention.push({ gym: g, kind: 'pending', rank: 0, label: 'Waiting for approval' })
+    } else if (g.status === 'active' && g.expires_at) {
+      const left = daysLeft(g.expires_at)
+      if (left <= 0) {
+        attention.push({ gym: g, kind: 'expired', rank: 1, label: `License expired ${expiryLabel(g.expires_at)}` })
+      } else if (left <= EXPIRY_WARNING_DAYS) {
+        attention.push({ gym: g, kind: 'expiring', rank: 2, label: `License ends ${expiryLabel(g.expires_at)}` })
+      }
     }
+  }
+  attention.sort((a, b) => a.rank - b.rank)
+
+  const navDefs: NavDef[] = [
+    { label: 'Overview', icon: LayoutDashboard, key: 'overview', target: 'top' },
+    { label: 'All gyms', icon: Building2, key: 'gyms', target: 'gyms', tab: 'all', badge: stats.total },
+    { label: 'Pending approval', icon: Clock, key: 'gyms', target: 'gyms', tab: 'pending', badge: stats.pending },
+    { label: 'Unpaid fees', icon: Wallet, key: 'gyms', target: 'gyms', tab: 'unpaid', badge: stats.unpaidGyms },
+    { label: 'Revenue', icon: BarChart3, key: 'revenue', target: 'revenue' }
   ]
 
+  function goTo(item: NavDef) {
+    setSection(item.key)
+    if (item.tab) {
+      setTab(item.tab)
+      setPage(1)
+    }
+    if (item.target === 'top') {
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+      return
+    }
+    window.setTimeout(
+      () => document.getElementById(item.target)?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+      60
+    )
+  }
+
+  const navItems: ShellNavItem[] = navDefs.map(d => ({
+    label: d.label,
+    icon: d.icon,
+    badge: d.badge,
+    active: d.tab ? section === 'gyms' && tab === d.tab : section === d.key,
+    onClick: () => goTo(d)
+  }))
+
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="mx-auto w-full max-w-7xl space-y-6 px-4 py-6 sm:px-6 sm:py-8 lg:px-8 lg:py-10">
-        {/* Header */}
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white shadow-sm shadow-blue-600/30">
-              <Shield className="w-5 h-5" />
-            </div>
-            <div>
-              <h1 className="text-2xl font-semibold tracking-tight text-gray-900">Super Admin</h1>
-              <p className="text-sm text-gray-500">{filteredGyms.length} gyms found</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-3 self-start rounded-2xl bg-white p-2 pl-4 shadow-sm ring-1 ring-gray-200/70 sm:self-auto">
-            <span className="whitespace-nowrap text-sm font-medium text-gray-500">Billing month</span>
-            <input
-              type="month"
-              value={month}
-              onChange={e => {
-                if (e.target.value) {
-                  setMonth(e.target.value)
-                  setPage(1)
-                }
-              }}
-              className={`${inputClass} w-40 !shadow-none`}
-            />
-            <Button
-              variant="outline"
-              className="text-red-600 hover:bg-red-50 hover:text-red-700"
-              onClick={async () => {
-                await signOut()
-                router.push('/auth/login')
-                router.refresh()
-              }}
-            >
-              <LogOut className="mr-2 h-4 w-4" />
-              Sign Out
-            </Button>
-          </div>
+    <AppShell
+      navItems={navItems}
+      workspaceName="Control panel"
+      workspaceRole="Super admin"
+      user={adminUser}
+      onSignOut={() => void handleSignOut()}
+      subtitle={`Gym subscriptions and licenses for ${monthLabel(month)}`}
+      topbarRight={
+        <div className="flex items-center gap-2">
+          <label htmlFor="billing-month" className="hidden text-xs font-medium text-slate-500 md:inline">
+            Billing month
+          </label>
+          <Input
+            id="billing-month"
+            type="month"
+            value={month}
+            onChange={e => {
+              if (e.target.value) {
+                setMonth(e.target.value)
+                setPage(1)
+              }
+            }}
+            className="h-9 w-40"
+          />
         </div>
+      }
+    >
+      <PageHeader
+        title="Platform overview"
+        description={`${stats.total} gyms on OpenSmash. Fees shown for ${monthLabel(month)}.`}
+      />
 
-        {error && (
-          <div className={`${bannerBase} border-red-100 bg-red-50 text-red-700`}>
-            <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
-            <span>{error}</span>
-          </div>
-        )}
-        {subsError && (
-          <div className={`${bannerBase} border-amber-200 bg-amber-50 text-amber-800`}>
-            <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
-            <span>{subsError}</span>
-          </div>
-        )}
-
-        {/* Stats */}
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          {statCards.map(stat => (
-            <Card
-              key={stat.title}
-              className="rounded-2xl border-0 bg-white shadow-sm ring-1 ring-gray-200/70 transition-shadow hover:shadow-md"
-            >
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 p-5 pb-3">
-                <CardTitle className="text-sm font-medium text-gray-500">{stat.title}</CardTitle>
-                <div className={`flex h-9 w-9 items-center justify-center rounded-xl ${stat.bgColor}`}>
-                  <stat.icon className={`w-5 h-5 ${stat.color}`} />
-                </div>
-              </CardHeader>
-              <CardContent className="p-5 pt-0">
-                <div className="mb-1 text-2xl font-semibold tracking-tight tabular-nums text-gray-900">
-                  {stat.value}
-                </div>
-                <p className="text-xs text-gray-500">{stat.subtitle}</p>
-              </CardContent>
-            </Card>
-          ))}
+      {error && (
+        <div role="alert" className={`${bannerBase} border-red-100 bg-red-50 text-red-700`}>
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{error}</span>
         </div>
+      )}
+      {subsError && (
+        <div role="alert" className={`${bannerBase} border-amber-200 bg-amber-50 text-amber-800`}>
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{subsError}</span>
+        </div>
+      )}
 
-        {/* Gyms list */}
-        <div className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-gray-200/70 sm:p-6">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div className="-mx-1 max-w-full overflow-x-auto px-1 py-1">
-              <div className="inline-flex gap-1 rounded-xl bg-gray-100 p-1">
-                {tabs.map(t => (
-                  <button
-                    key={t.key}
-                    onClick={() => {
-                      setTab(t.key)
-                      setPage(1)
-                    }}
-                    className={`whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 ${
-                      tab === t.key
-                        ? 'bg-white text-blue-600 shadow-sm'
-                        : 'text-gray-500 hover:text-gray-900'
-                    }`}
-                  >
-                    {t.label}{' '}
-                    <span
-                      className={`text-xs tabular-nums ${tab === t.key ? 'text-blue-500' : 'text-gray-400'}`}
-                    >
-                      ({t.count})
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="relative lg:w-80">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-              <input
-                type="text"
-                value={search}
-                onChange={e => {
-                  setSearch(e.target.value)
-                  setPage(1)
-                }}
-                placeholder="Search by gym, owner or email"
-                className={`${inputClass} pl-9`}
-              />
-            </div>
-          </div>
+      {/* Stats */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard
+          label="Total gyms"
+          value={stats.total}
+          hint={`${stats.active} active, ${stats.suspended} suspended`}
+          icon={Building2}
+        />
+        <StatCard
+          featured
+          label={`Collected (${monthLabel(month)})`}
+          value={formatCurrency(stats.collected)}
+          hint="Fees marked as paid"
+          icon={CheckCircle}
+        />
+        <StatCard
+          label={`Outstanding (${monthLabel(month)})`}
+          value={formatCurrency(stats.due)}
+          hint={`${stats.unpaidGyms} gyms have not paid yet`}
+          icon={Wallet}
+        />
+        <StatCard
+          label="Pending approval"
+          value={stats.pending}
+          hint="New gyms awaiting approval"
+          icon={Clock}
+        />
+      </div>
 
-          <div className="mt-5">
-            {/* Sticky column header (desktop table only). /admin has no sticky top bar, so it sticks near the top */}
-            <div className="sticky top-3 z-20 mb-2 hidden grid-cols-[2fr_1.6fr_1fr_1.2fr_80px_110px] gap-4 rounded-xl bg-gray-50/95 px-4 py-3 text-xs font-medium text-gray-500 ring-1 ring-gray-200/70 backdrop-blur xl:grid">
-              <span>Gym</span>
-              <span>Owner</span>
-              <span>Status</span>
-              <span>Fee ({monthLabel(month)})</span>
-              <span className="text-center">Paid</span>
-              <span className="text-right">Action</span>
-            </div>
-
-            {pageGyms.length === 0 ? (
-              <p className="rounded-2xl border border-dashed border-gray-200 py-14 text-center text-sm text-gray-500">
-                {gyms.length === 0 ? 'There are no gyms yet.' : 'No gyms match this filter.'}
-              </p>
-            ) : (
-              <div className="space-y-3 xl:space-y-2">
-                {pageGyms.map(gym => {
-                  const sub = subFor(gym.id, monthKey)
-                  const selected = selectedId === gym.id
-                  const expanded = expandedId === gym.id
-                  const style = statusStyles[gym.status] || statusStyles.inactive
-                  const history = subsByGym.get(gym.id) || []
-                  const totalPaid = history
-                    .filter(s => s.is_paid)
-                    .reduce((sum, s) => sum + Number(s.amount), 0)
-                  const totalDue = history
-                    .filter(s => !s.is_paid)
-                    .reduce((sum, s) => sum + Number(s.amount), 0)
-                  const paidMonths = history.filter(s => s.is_paid).length
-
-                  const statusPill = (
-                    <span
-                      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium capitalize ring-1 ring-inset ${style.badge}`}
-                    >
-                      <span className={`h-1.5 w-1.5 rounded-full ${style.dot}`} />
-                      {gym.status}
-                    </span>
-                  )
-
-                  const feeCell = sub ? (
-                    <p className="font-semibold tabular-nums text-gray-900">
-                      {formatCurrency(Number(sub.amount))}
-                    </p>
-                  ) : (
-                    <button
-                      onClick={e => {
-                        e.stopPropagation()
-                        openFee(gym, null)
-                      }}
-                      className="-ml-2 inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-blue-600 transition-colors hover:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
-                    >
-                      <Plus className="w-3 h-3" /> Set fee
-                    </button>
-                  )
-
-                  const tickButton = (
-                    <button
-                      onClick={e => {
-                        e.stopPropagation()
-                        handleTick(gym)
-                      }}
-                      disabled={busyId === gym.id}
-                      title={
-                        sub?.is_paid
-                          ? 'Paid. Click to remove the mark'
-                          : sub
-                            ? 'Mark as paid'
-                            : 'Set a fee first'
-                      }
-                      className={`flex h-8 w-8 items-center justify-center rounded-full border-2 text-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2 disabled:opacity-50 ${
-                        sub?.is_paid
-                          ? 'border-emerald-500 bg-emerald-500 !text-white shadow-sm hover:bg-emerald-600'
-                          : sub
-                            ? 'border-gray-300 hover:border-emerald-500 hover:text-emerald-500'
-                            : 'border-dashed border-gray-300'
-                      }`}
-                    >
-                      <Check className="w-4 h-4" />
-                    </button>
-                  )
-
-                  const actionButtons = (
-                    <div className="flex items-center justify-end gap-1">
-                      <button
-                        onClick={e => {
-                          e.stopPropagation()
-                          openFee(gym, sub || null)
-                        }}
-                        title="Edit fee"
-                        className={iconBtnClass}
-                      >
-                        <Pencil className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={e => {
-                          e.stopPropagation()
-                          setExpandedId(expanded ? null : gym.id)
-                        }}
-                        title="History"
-                        className={iconBtnClass}
-                      >
-                        <ChevronDown
-                          className={`w-4 h-4 transition-transform ${expanded ? 'rotate-180' : ''}`}
-                        />
-                      </button>
-                    </div>
-                  )
-
-                  return (
-                    <div
-                      key={gym.id}
-                      className={`rounded-2xl ring-1 transition-all ${
-                        selected
-                          ? 'bg-blue-50/60 ring-blue-300 shadow-sm'
-                          : 'bg-white ring-gray-200 hover:bg-gray-50/70 hover:ring-gray-300'
-                      }`}
-                    >
-                      {/* Desktop row */}
-                      <div
-                        onClick={() => setSelectedId(selected ? null : gym.id)}
-                        className="hidden cursor-pointer grid-cols-[2fr_1.6fr_1fr_1.2fr_80px_110px] items-center gap-4 px-4 py-3.5 text-sm xl:grid"
-                      >
-                        <div className="min-w-0">
-                          <p className="truncate font-semibold text-gray-900">{gym.name}</p>
-                          <p className="text-xs text-gray-500">Joined {formatDate(gym.created_at)}</p>
-                        </div>
-                        <div className="min-w-0">
-                          <p className="truncate text-gray-900">{gym.owner_name}</p>
-                          <p className="truncate text-xs text-gray-500">{gym.owner_email}</p>
-                        </div>
-                        <div>{statusPill}</div>
-                        <div>{feeCell}</div>
-                        <div className="flex justify-center">{tickButton}</div>
-                        {actionButtons}
-                      </div>
-
-                      {/* Mobile / tablet stacked card */}
-                      <div
-                        onClick={() => setSelectedId(selected ? null : gym.id)}
-                        className="cursor-pointer space-y-4 p-4 text-sm xl:hidden"
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="truncate text-base font-semibold text-gray-900">{gym.name}</p>
-                            <p className="text-xs text-gray-500">Joined {formatDate(gym.created_at)}</p>
-                          </div>
-                          {statusPill}
-                        </div>
-
-                        <div className="min-w-0">
-                          <p className="mb-0.5 text-xs font-medium text-gray-500">Owner</p>
-                          <p className="truncate text-gray-900">{gym.owner_name}</p>
-                          <p className="truncate text-xs text-gray-500">{gym.owner_email}</p>
-                        </div>
-
-                        <div className="flex items-center justify-between gap-3 rounded-xl bg-gray-50 px-3 py-2.5 ring-1 ring-gray-100">
-                          <div className="min-w-0">
-                            <p className="mb-0.5 text-xs font-medium text-gray-500">
-                              Fee ({monthLabel(month)})
-                            </p>
-                            {feeCell}
-                          </div>
-                          <div className="flex flex-col items-center gap-1">
-                            <span className="text-xs font-medium text-gray-500">Paid</span>
-                            {tickButton}
-                          </div>
-                          {actionButtons}
-                        </div>
-                      </div>
-
-                      {expanded && (
-                        <div className="rounded-b-2xl border-t border-gray-100 bg-white p-4 sm:p-5">
-                          <div className="mb-4 space-y-4">
-                            <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3 xl:grid-cols-6 [&>div]:rounded-xl [&>div]:bg-gray-50 [&>div]:p-3 [&>div]:ring-1 [&>div]:ring-gray-100">
-                              <div>
-                                <p className="text-xs text-gray-500">Collected to date</p>
-                                <p className="font-semibold tabular-nums text-emerald-600">
-                                  {formatCurrency(totalPaid)}
-                                </p>
-                              </div>
-                              <div>
-                                <p className="text-xs text-gray-500">Outstanding</p>
-                                <p className="font-semibold tabular-nums text-orange-600">
-                                  {formatCurrency(totalDue)}
-                                </p>
-                              </div>
-                              <div>
-                                <p className="text-xs text-gray-500">Average / month</p>
-                                <p className="font-semibold tabular-nums text-gray-900">
-                                  {formatCurrency(paidMonths ? totalPaid / paidMonths : 0)}
-                                </p>
-                              </div>
-                              <div>
-                                <p className="text-xs text-gray-500">Phone</p>
-                                <p className="font-semibold text-gray-900">{gym.phone || '-'}</p>
-                              </div>
-                              <div>
-                                <p className="text-xs text-gray-500">License expires</p>
-                                <p
-                                  className={`font-semibold ${
-                                    isPast(gym.expires_at) ? 'text-red-600' : 'text-gray-900'
-                                  }`}
-                                >
-                                  {expiryLabel(gym.expires_at)}
-                                </p>
-                              </div>
-                              <div>
-                                <p className="text-xs text-gray-500">License key</p>
-                                <div className="flex items-center gap-1">
-                                  <code className="select-all break-all font-mono text-xs font-semibold text-gray-900">
-                                    {gym.license_key || '-'}
-                                  </code>
-                                  {gym.license_key && (
-                                    <button
-                                      onClick={() => void copyKey(gym)}
-                                      title="Copy key"
-                                      className="rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
-                                    >
-                                      {copiedId === gym.id ? (
-                                        <Check className="w-4 h-4 text-emerald-600" />
-                                      ) : (
-                                        <Copy className="w-4 h-4" />
-                                      )}
-                                    </button>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-                            <div className="flex flex-wrap gap-2 border-t border-gray-100 pt-4">
-                              <Button size="sm" variant="outline" onClick={() => openFee(gym, null)}>
-                                <Plus className="w-4 h-4 mr-1" /> Add month
-                              </Button>
-                              <Button size="sm" variant="outline" onClick={() => requestExpiry(gym)}>
-                                Set license expiry
-                              </Button>
-                              {gym.status === 'active' && (
-                                <Button
-                                  size="sm"
-                                  variant="destructive"
-                                  onClick={() => requestStatus(gym, 'suspended')}
-                                >
-                                  Suspend
-                                </Button>
-                              )}
-                              {(gym.status === 'suspended' || gym.status === 'pending') && (
-                                <Button size="sm" onClick={() => requestStatus(gym, 'active')}>
-                                  {gym.status === 'pending' ? 'Approve' : 'Reactivate'}
-                                </Button>
-                              )}
-                            </div>
-                          </div>
-
-                          {gym.suspended_at && gym.status === 'suspended' && (
-                            <div className="mb-4 rounded-xl border border-red-100 bg-red-50 p-3 text-xs text-red-800">
-                              <strong>Suspended:</strong> {formatDate(gym.suspended_at)}
-                              {gym.suspended_reason ? ` - ${gym.suspended_reason}` : ''}
-                            </div>
-                          )}
-
-                          {history.length === 0 ? (
-                            <p className="rounded-xl border border-dashed border-gray-200 py-6 text-center text-sm text-gray-500">
-                              There are no fee records yet.
-                            </p>
-                          ) : (
-                            <div className="space-y-2">
-                              {history.map(s => (
-                                <div
-                                  key={s.id}
-                                  className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-xl bg-gray-50 px-3 py-2.5 text-sm ring-1 ring-gray-100 transition-colors hover:bg-gray-100/70"
-                                >
-                                  <div className="min-w-0">
-                                    <p className="font-medium text-gray-900">
-                                      {monthLabel(s.billing_month.slice(0, 7))}
-                                    </p>
-                                    {s.note && <p className="text-xs text-gray-500">{s.note}</p>}
-                                  </div>
-                                  <div className="flex items-center gap-3">
-                                    <span className="font-semibold tabular-nums text-gray-900">
-                                      {formatCurrency(Number(s.amount))}
-                                    </span>
-                                    <span
-                                      className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset ${
-                                        s.is_paid
-                                          ? 'bg-emerald-50 text-emerald-700 ring-emerald-600/20'
-                                          : 'bg-amber-50 text-amber-700 ring-amber-600/20'
-                                      }`}
-                                    >
-                                      {s.is_paid
-                                        ? `Paid${s.paid_at ? ` ${formatDate(s.paid_at)}` : ''}`
-                                        : 'Unpaid'}
-                                    </span>
-                                    <div className="flex items-center gap-0.5">
-                                      <button
-                                        onClick={() => openFee(gym, s)}
-                                        title="Edit"
-                                        className="rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-white hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
-                                      >
-                                        <Pencil className="w-4 h-4" />
-                                      </button>
-                                      <button
-                                        onClick={() => requestDeleteSub(gym, s)}
-                                        title="Delete"
-                                        className="rounded-lg p-1.5 text-red-500 transition-colors hover:bg-red-50 hover:text-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-600"
-                                      >
-                                        <Trash2 className="w-4 h-4" />
-                                      </button>
-                                    </div>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </div>
-
-          {filteredGyms.length > 0 && (
-            <div className="mt-6 flex flex-col items-center justify-between gap-3 border-t border-gray-100 pt-4 text-xs text-gray-500 sm:flex-row">
-              <span>
-                Showing {pageStart + 1}-{Math.min(pageStart + PAGE_SIZE, filteredGyms.length)} of{' '}
-                {filteredGyms.length}
+      {/* Needs attention (only shown when something needs a decision) */}
+      {attention.length > 0 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <CalendarClock className="h-4 w-4 text-amber-600" />
+              Needs attention
+              <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold tabular-nums text-amber-700">
+                {attention.length}
               </span>
-              <div className="flex flex-wrap items-center justify-center gap-1">
-                <button
-                  onClick={() => setPage(Math.max(1, safePage - 1))}
-                  disabled={safePage === 1}
-                  className="rounded-lg p-1.5 transition-colors hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 disabled:opacity-40 disabled:hover:bg-transparent"
-                  aria-label="Previous page"
-                >
-                  <ChevronLeft className="w-4 h-4" />
-                </button>
-                {Array.from({ length: totalPages }, (_, i) => i + 1).map(n => (
-                  <button
-                    key={n}
-                    onClick={() => setPage(n)}
-                    className={`h-8 w-8 rounded-lg text-xs font-medium tabular-nums transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 ${
-                      n === safePage ? 'bg-blue-600 text-white shadow-sm' : 'hover:bg-gray-100'
-                    }`}
-                  >
-                    {n}
-                  </button>
-                ))}
-                <button
-                  onClick={() => setPage(Math.min(totalPages, safePage + 1))}
-                  disabled={safePage === totalPages}
-                  className="rounded-lg p-1.5 transition-colors hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 disabled:opacity-40 disabled:hover:bg-transparent"
-                  aria-label="Next page"
-                >
-                  <ChevronRight className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Monthly overview */}
-        <Card className="rounded-2xl border-0 bg-white shadow-sm ring-1 ring-gray-200/70">
-          <CardHeader className="p-5 pb-4 sm:p-6 sm:pb-4">
-            <CardTitle className="flex items-center gap-2 text-base font-semibold text-gray-900">
-              <Wallet className="w-5 h-5 text-blue-600" />
-              Monthly revenue (last 6 months)
             </CardTitle>
           </CardHeader>
-          <CardContent className="p-5 pt-0 sm:p-6 sm:pt-0">
-            <div className="space-y-4">
+          <CardContent>
+            <ul className="divide-y divide-slate-100">
+              {attention.slice(0, 5).map(item => (
+                <li key={`${item.gym.id}-${item.kind}`} className="flex flex-wrap items-center gap-3 py-3 first:pt-0 last:pb-0">
+                  <Avatar name={item.gym.name} className="h-9 w-9 text-xs" />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-slate-900">{item.gym.name}</p>
+                    <p className="truncate text-xs text-slate-500">{item.gym.owner_name}</p>
+                  </div>
+                  <StatusPill tone={item.kind === 'expiring' ? 'warning' : item.kind === 'expired' ? 'danger' : 'info'}>
+                    {item.label}
+                  </StatusPill>
+                  {item.kind === 'pending' ? (
+                    <Button size="sm" onClick={() => requestStatus(item.gym, 'active')}>
+                      Approve
+                    </Button>
+                  ) : (
+                    <Button size="sm" variant="outline" onClick={() => requestExpiry(item.gym)}>
+                      Set expiry
+                    </Button>
+                  )}
+                </li>
+              ))}
+            </ul>
+            {attention.length > 5 && (
+              <p className="mt-3 text-xs text-slate-500">and {attention.length - 5} more. Use the filters below.</p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Revenue + status */}
+      <div id="revenue" className="grid scroll-mt-24 grid-cols-1 gap-4 xl:grid-cols-3">
+        <Card className="xl:col-span-2">
+          <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3 space-y-0 pb-2">
+            <div>
+              <CardTitle className="text-base">Monthly revenue</CardTitle>
+              <p className="mt-1 text-xs text-slate-500">Last 6 months up to {monthLabel(month)}</p>
+            </div>
+            <div className="flex items-center gap-4 text-xs text-slate-500">
+              <span className="flex items-center gap-1.5">
+                <span className="h-2.5 w-2.5 rounded-full bg-brand" /> Collected
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="h-2.5 w-2.5 rounded-full bg-blue-200" /> Outstanding
+              </span>
+            </div>
+          </CardHeader>
+          <CardContent className="pt-4">
+            <div className="flex h-56 items-end justify-between gap-3 sm:gap-6">
               {overview.rows.map(row => (
                 <div
                   key={row.key}
-                  className="grid grid-cols-[72px_1fr] items-center gap-x-3 gap-y-1 text-sm sm:grid-cols-[80px_1fr_auto]"
+                  className="flex h-full min-w-0 flex-1 flex-col items-center justify-end gap-2"
+                  title={`${monthLabel(row.key.slice(0, 7))}: collected ${formatCurrency(
+                    row.collected
+                  )}, outstanding ${formatCurrency(row.due)}`}
                 >
-                  <span className="text-gray-600">{monthLabel(row.key.slice(0, 7))}</span>
-                  <div className="flex h-2.5 overflow-hidden rounded-full bg-gray-100">
-                    <div
-                      className="bg-emerald-500"
-                      style={{ width: `${(row.collected / overview.max) * 100}%` }}
-                    />
-                    <div
-                      className="bg-amber-300"
-                      style={{ width: `${(row.due / overview.max) * 100}%` }}
-                    />
+                  <div className="flex min-h-0 w-full max-w-[56px] flex-1 flex-col justify-end overflow-hidden rounded-xl bg-slate-100">
+                    <div className="bg-blue-200" style={{ height: `${(row.due / overview.max) * 100}%` }} />
+                    <div className="bg-brand" style={{ height: `${(row.collected / overview.max) * 100}%` }} />
                   </div>
-                  <span className="col-span-2 text-xs tabular-nums text-gray-600 sm:col-span-1 sm:text-right">
-                    <span className="font-semibold text-emerald-600">{formatCurrency(row.collected)}</span>
-                    {row.due > 0 && (
-                      <span className="text-orange-600"> / outstanding {formatCurrency(row.due)}</span>
-                    )}
+                  <span className="text-xs font-medium text-slate-600">{monthLabel(row.key.slice(0, 7))}</span>
+                  <span className="max-w-full truncate text-[11px] tabular-nums text-slate-400">
+                    {formatCurrency(row.collected)}
                   </span>
                 </div>
               ))}
             </div>
-            <div className="mt-5 flex gap-4 border-t border-gray-100 pt-4 text-xs text-gray-500">
-              <span className="flex items-center gap-1.5">
-                <span className="h-2 w-2 rounded-full bg-emerald-500" /> Collected
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="h-2 w-2 rounded-full bg-amber-300" /> Outstanding
-              </span>
-            </div>
           </CardContent>
         </Card>
 
-        {/* Fee modal */}
-        {feeGym && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-gray-900/40 p-4 backdrop-blur-sm">
-            <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl ring-1 ring-gray-200">
-              <div className="mb-5 flex items-start justify-between gap-3">
-                <div>
-                  <h2 className="text-lg font-semibold tracking-tight text-gray-900">
-                    {feeSub ? 'Edit fee' : 'Add fee'}
-                  </h2>
-                  <p className="text-sm text-gray-500">{feeGym.name}</p>
-                </div>
-                <button onClick={closeFee} className={iconBtnClass} aria-label="Close">
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              <form onSubmit={handleSaveFee} className="space-y-4">
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-gray-700">Month *</label>
-                  <input
-                    type="month"
-                    value={feeForm.month}
-                    onChange={e => setFeeForm(f => ({ ...f, month: e.target.value }))}
-                    disabled={!!feeSub}
-                    className={`${inputClass} disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500`}
-                  />
-                </div>
-
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-gray-700">
-                    Amount (Rs) *
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="any"
-                    value={feeForm.amount}
-                    onChange={e => setFeeForm(f => ({ ...f, amount: e.target.value }))}
-                    className={inputClass}
-                    placeholder="5000"
-                  />
-                  <p className="mt-1.5 text-xs text-gray-500">
-                    Enter how much the gym is paying for this month.
-                  </p>
-                </div>
-
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-gray-700">Note</label>
-                  <input
-                    type="text"
-                    value={feeForm.note}
-                    onChange={e => setFeeForm(f => ({ ...f, note: e.target.value }))}
-                    className={inputClass}
-                    placeholder="Optional (e.g. Easypaisa, cash)"
-                  />
-                </div>
-
-                <label className="flex cursor-pointer items-center gap-3 rounded-xl bg-gray-50 p-3 ring-1 ring-gray-100 transition-colors hover:bg-gray-100">
-                  <input
-                    type="checkbox"
-                    checked={feeForm.paid}
-                    onChange={e => setFeeForm(f => ({ ...f, paid: e.target.checked }))}
-                    className="h-4 w-4 rounded accent-blue-600"
-                  />
-                  <span className="text-sm text-gray-700">Paid (the gym has paid)</span>
-                </label>
-
-                {feeError && (
-                  <div className="rounded-xl border border-red-100 bg-red-50 p-3 text-sm text-red-700">
-                    {feeError}
-                  </div>
-                )}
-
-                <div className="flex justify-end gap-2 pt-2">
-                  <Button type="button" variant="outline" onClick={closeFee} disabled={feeSaving}>
-                    Cancel
-                  </Button>
-                  <Button type="submit" disabled={feeSaving}>
-                    {feeSaving ? 'Saving...' : 'Save'}
-                  </Button>
-                </div>
-              </form>
-            </div>
-          </div>
-        )}
-
-        {/* Confirm modal */}
-        {confirmState && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/40 p-4 backdrop-blur-sm">
-            <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl ring-1 ring-gray-200">
-              <div className="mb-3 flex items-center gap-3">
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Gym status</CardTitle>
+            <p className="mt-1 text-xs text-slate-500">{stats.total} gyms in total</p>
+          </CardHeader>
+          <CardContent className="space-y-5 pt-4">
+            <div className="flex h-3 overflow-hidden rounded-full bg-slate-100">
+              {statusRows.map(r => (
                 <div
-                  className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${
-                    confirmState.danger ? 'bg-red-50' : 'bg-blue-50'
-                  }`}
-                >
-                  <AlertTriangle
-                    className={`w-5 h-5 ${confirmState.danger ? 'text-red-600' : 'text-blue-600'}`}
-                  />
-                </div>
-                <h2 className="text-lg font-semibold tracking-tight text-gray-900">
-                  {confirmState.title}
-                </h2>
-              </div>
-              <p className="text-sm leading-relaxed text-gray-600">{confirmState.message}</p>
-              {confirmState.askReason && (
-                <input
-                  type="text"
-                  value={reason}
-                  onChange={e => setReason(e.target.value)}
-                  className={`${inputClass} mt-4`}
-                  placeholder="Reason (optional)"
+                  key={r.label}
+                  className={r.dot}
+                  style={{ width: `${(r.count / Math.max(1, stats.total)) * 100}%` }}
                 />
-              )}
-              {confirmState.expiry && (
-                <div className="mt-4">
-                  <label className="mb-1.5 block text-sm font-medium text-gray-700">
-                    {confirmState.expiry === 'required' ? 'New expiry date *' : 'Expiry date (optional)'}
-                  </label>
-                  <input
-                    type="date"
-                    value={expiryDate}
-                    min={confirmState.expiry === 'required' ? pkToday() : undefined}
-                    onChange={e => {
-                      setExpiryDate(e.target.value)
-                      setConfirmError(null)
-                    }}
-                    className={inputClass}
-                  />
-                </div>
-              )}
-              {confirmError && (
-                <div className="mt-3 rounded-xl border border-red-100 bg-red-50 p-3 text-sm text-red-700">
-                  {confirmError}
-                </div>
-              )}
-              <div className="mt-6 flex justify-end gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => {
-                    setConfirmState(null)
-                    setReason('')
-                    setExpiryDate('')
-                    setConfirmError(null)
-                  }}
-                  disabled={confirmBusy}
-                >
-                  Cancel
-                </Button>
+              ))}
+            </div>
+            <ul className="space-y-3 text-sm">
+              {statusRows.map(r => (
+                <li key={r.label} className="flex items-center justify-between">
+                  <span className="flex items-center gap-2 text-slate-600">
+                    <span className={`h-2.5 w-2.5 rounded-full ${r.dot}`} />
+                    {r.label}
+                  </span>
+                  <span className="font-semibold tabular-nums text-slate-900">{r.count}</span>
+                </li>
+              ))}
+            </ul>
+            <div className="rounded-2xl bg-canvas p-4 ring-1 ring-slate-200/70">
+              <div className="mb-2 flex items-center justify-between text-xs">
+                <span className="font-medium text-slate-600">Fees paid ({monthLabel(month)})</span>
+                <span className="font-semibold tabular-nums text-slate-900">{paidPct}%</span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-slate-200">
+                <div
+                  className="h-full rounded-full bg-emerald-500 transition-all duration-700"
+                  style={{ width: `${paidPct}%` }}
+                />
+              </div>
+              <p className="mt-2 text-xs text-slate-500">
+                {paidGyms} of {stats.total} gyms have paid
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Gyms list */}
+      <Card id="gyms" className="scroll-mt-24 p-4 sm:p-6">
+        <div className="mb-5">
+          <h2 className="text-base font-semibold tracking-tight text-slate-900">Gyms</h2>
+          <p className="text-xs text-slate-500">{filteredGyms.length} gyms found</p>
+        </div>
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="-mx-1 max-w-full overflow-x-auto px-1 py-1">
+            <div className="inline-flex gap-1 rounded-xl bg-slate-100 p-1">
+              {tabs.map(t => (
                 <button
-                  onClick={runConfirm}
-                  disabled={confirmBusy}
-                  className={`rounded-lg px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:opacity-50 ${
-                    confirmState.danger
-                      ? 'bg-red-600 hover:bg-red-700 focus-visible:ring-red-600'
-                      : 'bg-blue-600 hover:bg-blue-700 focus-visible:ring-blue-600'
+                  key={t.key}
+                  onClick={() => {
+                    setTab(t.key)
+                    setPage(1)
+                  }}
+                  className={`whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand ${
+                    tab === t.key ? 'bg-white text-brand-deep shadow-sm' : 'text-slate-500 hover:text-slate-900'
                   }`}
                 >
-                  {confirmBusy ? 'Please wait...' : confirmState.confirmLabel}
+                  {t.label}{' '}
+                  <span className={`text-xs tabular-nums ${tab === t.key ? 'text-brand' : 'text-slate-400'}`}>
+                    ({t.count})
+                  </span>
                 </button>
-              </div>
+              ))}
+            </div>
+          </div>
+          <div className="relative lg:w-80">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <Input
+              type="text"
+              value={search}
+              onChange={e => {
+                setSearch(e.target.value)
+                setPage(1)
+              }}
+              placeholder="Search by gym, owner or email"
+              aria-label="Search gyms"
+              className="pl-9"
+            />
+          </div>
+        </div>
+
+        <div className="mt-5">
+          {/* Sticky column header (desktop table only). Sticks just below the topbar */}
+          <div className="sticky top-[4.5rem] z-20 mb-2 hidden grid-cols-[2fr_1.6fr_1fr_1.2fr_80px_110px] gap-4 rounded-xl bg-slate-50/95 px-4 py-3 text-xs font-medium text-slate-500 ring-1 ring-slate-200/70 backdrop-blur xl:grid">
+            <span>Gym</span>
+            <span>Owner</span>
+            <span>Status</span>
+            <span>Fee ({monthLabel(month)})</span>
+            <span className="text-center">Paid</span>
+            <span className="text-right">Action</span>
+          </div>
+
+          {pageGyms.length === 0 ? (
+            <EmptyState
+              icon={Building2}
+              title={gyms.length === 0 ? 'There are no gyms yet' : 'No gyms match this filter'}
+              description={
+                gyms.length === 0
+                  ? 'New gyms will appear here when owners sign up.'
+                  : 'Try another tab or a different search.'
+              }
+              action={
+                gyms.length > 0 && (tab !== 'all' || search) ? (
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setTab('all')
+                      setSearch('')
+                      setPage(1)
+                    }}
+                  >
+                    Clear filters
+                  </Button>
+                ) : undefined
+              }
+            />
+          ) : (
+            <div className="space-y-3 xl:space-y-2">
+              {pageGyms.map(gym => {
+                const sub = subFor(gym.id, monthKey)
+                const selected = selectedId === gym.id
+                const expanded = expandedId === gym.id
+                const tone = statusTone[gym.status] || 'neutral'
+                const history = subsByGym.get(gym.id) || []
+                const totalPaid = history.filter(s => s.is_paid).reduce((sum, s) => sum + Number(s.amount), 0)
+                const totalDue = history.filter(s => !s.is_paid).reduce((sum, s) => sum + Number(s.amount), 0)
+                const paidMonths = history.filter(s => s.is_paid).length
+
+                const statusPill = <StatusPill tone={tone}>{gym.status}</StatusPill>
+
+                const feeCell = sub ? (
+                  <p className="font-semibold tabular-nums text-slate-900">{formatCurrency(Number(sub.amount))}</p>
+                ) : (
+                  <button
+                    onClick={e => {
+                      e.stopPropagation()
+                      openFee(gym, null)
+                    }}
+                    className="-ml-2 inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-brand transition-colors hover:bg-brand-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+                  >
+                    <Plus className="h-3 w-3" /> Set fee
+                  </button>
+                )
+
+                const tickButton = (
+                  <button
+                    onClick={e => {
+                      e.stopPropagation()
+                      handleTick(gym)
+                    }}
+                    disabled={busyId === gym.id}
+                    aria-label={sub?.is_paid ? 'Paid. Click to remove the mark' : sub ? 'Mark as paid' : 'Set a fee first'}
+                    title={sub?.is_paid ? 'Paid. Click to remove the mark' : sub ? 'Mark as paid' : 'Set a fee first'}
+                    className={`flex h-8 w-8 items-center justify-center rounded-full border-2 text-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 disabled:opacity-50 ${
+                      sub?.is_paid
+                        ? 'border-emerald-500 bg-emerald-500 !text-white shadow-sm hover:bg-emerald-600'
+                        : sub
+                          ? 'border-slate-300 hover:border-emerald-500 hover:text-emerald-500'
+                          : 'border-dashed border-slate-300'
+                    }`}
+                  >
+                    <Check className="h-4 w-4" />
+                  </button>
+                )
+
+                const actionButtons = (
+                  <div className="flex items-center justify-end gap-1">
+                    <button
+                      onClick={e => {
+                        e.stopPropagation()
+                        openFee(gym, sub || null)
+                      }}
+                      title="Edit fee"
+                      aria-label="Edit fee"
+                      className={iconBtnClass}
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={e => {
+                        e.stopPropagation()
+                        setExpandedId(expanded ? null : gym.id)
+                      }}
+                      title="History"
+                      aria-label="Show fee history"
+                      aria-expanded={expanded}
+                      className={iconBtnClass}
+                    >
+                      <ChevronDown className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+                    </button>
+                  </div>
+                )
+
+                return (
+                  <div
+                    key={gym.id}
+                    className={`rounded-2xl ring-1 transition-all ${
+                      selected
+                        ? 'bg-brand-soft/50 shadow-sm ring-brand-light/60'
+                        : 'bg-white ring-slate-200 hover:bg-slate-50/70 hover:ring-slate-300'
+                    }`}
+                  >
+                    {/* Desktop row */}
+                    <div
+                      onClick={() => setSelectedId(selected ? null : gym.id)}
+                      className="hidden cursor-pointer grid-cols-[2fr_1.6fr_1fr_1.2fr_80px_110px] items-center gap-4 px-4 py-3.5 text-sm xl:grid"
+                    >
+                      <div className="flex min-w-0 items-center gap-3">
+                        <Avatar name={gym.name} className="h-9 w-9 text-xs" />
+                        <div className="min-w-0">
+                          <p className="truncate font-semibold text-slate-900">{gym.name}</p>
+                          <p className="text-xs text-slate-500">Joined {formatDate(gym.created_at)}</p>
+                        </div>
+                      </div>
+                      <div className="min-w-0">
+                        <p className="truncate text-slate-900">{gym.owner_name}</p>
+                        <p className="truncate text-xs text-slate-500">{gym.owner_email}</p>
+                      </div>
+                      <div>{statusPill}</div>
+                      <div>{feeCell}</div>
+                      <div className="flex justify-center">{tickButton}</div>
+                      {actionButtons}
+                    </div>
+
+                    {/* Mobile / tablet stacked card */}
+                    <div
+                      onClick={() => setSelectedId(selected ? null : gym.id)}
+                      className="cursor-pointer space-y-4 p-4 text-sm xl:hidden"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex min-w-0 items-center gap-3">
+                          <Avatar name={gym.name} className="h-10 w-10 text-sm" />
+                          <div className="min-w-0">
+                            <p className="truncate text-base font-semibold text-slate-900">{gym.name}</p>
+                            <p className="text-xs text-slate-500">Joined {formatDate(gym.created_at)}</p>
+                          </div>
+                        </div>
+                        {statusPill}
+                      </div>
+
+                      <div className="min-w-0">
+                        <p className="mb-0.5 text-xs font-medium text-slate-500">Owner</p>
+                        <p className="truncate text-slate-900">{gym.owner_name}</p>
+                        <p className="truncate text-xs text-slate-500">{gym.owner_email}</p>
+                      </div>
+
+                      <div className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-3 py-2.5 ring-1 ring-slate-100">
+                        <div className="min-w-0">
+                          <p className="mb-0.5 text-xs font-medium text-slate-500">Fee ({monthLabel(month)})</p>
+                          {feeCell}
+                        </div>
+                        <div className="flex flex-col items-center gap-1">
+                          <span className="text-xs font-medium text-slate-500">Paid</span>
+                          {tickButton}
+                        </div>
+                        {actionButtons}
+                      </div>
+                    </div>
+
+                    {expanded && (
+                      <div className="rounded-b-2xl border-t border-slate-100 bg-white p-4 sm:p-5">
+                        <div className="mb-4 space-y-4">
+                          <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3 xl:grid-cols-6 [&>div]:rounded-xl [&>div]:bg-slate-50 [&>div]:p-3 [&>div]:ring-1 [&>div]:ring-slate-100">
+                            <div>
+                              <p className="text-xs text-slate-500">Collected to date</p>
+                              <p className="font-semibold tabular-nums text-emerald-600">{formatCurrency(totalPaid)}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-slate-500">Outstanding</p>
+                              <p className="font-semibold tabular-nums text-orange-600">{formatCurrency(totalDue)}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-slate-500">Average / month</p>
+                              <p className="font-semibold tabular-nums text-slate-900">
+                                {formatCurrency(paidMonths ? totalPaid / paidMonths : 0)}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-slate-500">Phone</p>
+                              <p className="font-semibold text-slate-900">{gym.phone || '-'}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-slate-500">License expires</p>
+                              <p className={`font-semibold ${isPast(gym.expires_at) ? 'text-red-600' : 'text-slate-900'}`}>
+                                {expiryLabel(gym.expires_at)}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-slate-500">License key</p>
+                              <div className="flex items-center gap-1">
+                                <code className="select-all break-all font-mono text-xs font-semibold text-slate-900">
+                                  {gym.license_key || '-'}
+                                </code>
+                                {gym.license_key && (
+                                  <button
+                                    onClick={() => void copyKey(gym)}
+                                    title="Copy key"
+                                    aria-label="Copy license key"
+                                    className="rounded-lg p-1.5 text-slate-500 transition-colors hover:bg-slate-100 hover:text-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+                                  >
+                                    <Copy className="h-4 w-4" />
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-4">
+                            <Button size="sm" variant="outline" onClick={() => openFee(gym, null)}>
+                              <Plus className="h-4 w-4" /> Add month
+                            </Button>
+                            <Button size="sm" variant="outline" onClick={() => requestExpiry(gym)}>
+                              Set license expiry
+                            </Button>
+                            {gym.status === 'active' && (
+                              <Button size="sm" variant="destructive" onClick={() => requestStatus(gym, 'suspended')}>
+                                Suspend
+                              </Button>
+                            )}
+                            {(gym.status === 'suspended' || gym.status === 'pending') && (
+                              <Button size="sm" onClick={() => requestStatus(gym, 'active')}>
+                                {gym.status === 'pending' ? 'Approve' : 'Reactivate'}
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+
+                        {gym.suspended_at && gym.status === 'suspended' && (
+                          <div className="mb-4 rounded-xl border border-red-100 bg-red-50 p-3 text-xs text-red-800">
+                            <strong>Suspended:</strong> {formatDate(gym.suspended_at)}
+                            {gym.suspended_reason ? ` - ${gym.suspended_reason}` : ''}
+                          </div>
+                        )}
+
+                        {history.length === 0 ? (
+                          <p className="rounded-xl border border-dashed border-slate-200 py-6 text-center text-sm text-slate-500">
+                            There are no fee records yet.
+                          </p>
+                        ) : (
+                          <div className="space-y-2">
+                            {history.map(s => (
+                              <div
+                                key={s.id}
+                                className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-xl bg-slate-50 px-3 py-2.5 text-sm ring-1 ring-slate-100 transition-colors hover:bg-slate-100/70"
+                              >
+                                <div className="min-w-0">
+                                  <p className="font-medium text-slate-900">{monthLabel(s.billing_month.slice(0, 7))}</p>
+                                  {s.note && <p className="text-xs text-slate-500">{s.note}</p>}
+                                </div>
+                                <div className="flex items-center gap-3">
+                                  <span className="font-semibold tabular-nums text-slate-900">
+                                    {formatCurrency(Number(s.amount))}
+                                  </span>
+                                  <StatusPill tone={s.is_paid ? 'success' : 'warning'}>
+                                    {s.is_paid ? `Paid${s.paid_at ? ` ${formatDate(s.paid_at)}` : ''}` : 'Unpaid'}
+                                  </StatusPill>
+                                  <div className="flex items-center gap-0.5">
+                                    <button
+                                      onClick={() => openFee(gym, s)}
+                                      title="Edit"
+                                      aria-label="Edit fee record"
+                                      className="rounded-lg p-1.5 text-slate-500 transition-colors hover:bg-white hover:text-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+                                    >
+                                      <Pencil className="h-4 w-4" />
+                                    </button>
+                                    <button
+                                      onClick={() => requestDeleteSub(gym, s)}
+                                      title="Delete"
+                                      aria-label="Delete fee record"
+                                      className="rounded-lg p-1.5 text-red-500 transition-colors hover:bg-red-50 hover:text-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-600"
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+
+        {filteredGyms.length > 0 && (
+          <div className="mt-6 flex flex-col items-center justify-between gap-3 border-t border-slate-100 pt-4 text-xs text-slate-500 sm:flex-row">
+            <span>
+              Showing {pageStart + 1}-{Math.min(pageStart + PAGE_SIZE, filteredGyms.length)} of {filteredGyms.length}
+            </span>
+            <div className="flex flex-wrap items-center justify-center gap-1">
+              <button
+                onClick={() => setPage(Math.max(1, safePage - 1))}
+                disabled={safePage === 1}
+                className="rounded-lg p-1.5 transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand disabled:opacity-40 disabled:hover:bg-transparent"
+                aria-label="Previous page"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              {Array.from({ length: totalPages }, (_, i) => i + 1).map(n => (
+                <button
+                  key={n}
+                  onClick={() => setPage(n)}
+                  aria-current={n === safePage ? 'page' : undefined}
+                  className={`h-8 w-8 rounded-lg text-xs font-medium tabular-nums transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand ${
+                    n === safePage ? 'cs-primary text-white shadow-sm' : 'hover:bg-slate-100'
+                  }`}
+                >
+                  {n}
+                </button>
+              ))}
+              <button
+                onClick={() => setPage(Math.min(totalPages, safePage + 1))}
+                disabled={safePage === totalPages}
+                className="rounded-lg p-1.5 transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand disabled:opacity-40 disabled:hover:bg-transparent"
+                aria-label="Next page"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
             </div>
           </div>
         )}
-      </div>
-    </div>
+      </Card>
+
+      {/* Fee modal */}
+      <Modal
+        open={!!feeGym}
+        onClose={closeFee}
+        dismissible={!feeSaving}
+        title={feeSub ? 'Edit fee' : 'Add fee'}
+        description={feeGym?.name}
+        footer={
+          <>
+            <Button type="button" variant="outline" onClick={closeFee} disabled={feeSaving}>
+              Cancel
+            </Button>
+            <Button type="submit" form="fee-form" disabled={feeSaving}>
+              {feeSaving ? 'Saving...' : 'Save'}
+            </Button>
+          </>
+        }
+      >
+        <form id="fee-form" onSubmit={handleSaveFee} className="space-y-4">
+          <div>
+            <label htmlFor="fee-month" className="mb-1.5 block text-sm font-medium text-slate-700">
+              Month *
+            </label>
+            <Input
+              id="fee-month"
+              type="month"
+              value={feeForm.month}
+              onChange={e => setFeeForm(f => ({ ...f, month: e.target.value }))}
+              disabled={!!feeSub}
+            />
+          </div>
+
+          <div>
+            <label htmlFor="fee-amount" className="mb-1.5 block text-sm font-medium text-slate-700">
+              Amount (Rs) *
+            </label>
+            <Input
+              id="fee-amount"
+              type="number"
+              min="0"
+              step="any"
+              value={feeForm.amount}
+              onChange={e => setFeeForm(f => ({ ...f, amount: e.target.value }))}
+              placeholder="5000"
+            />
+            <p className="mt-1.5 text-xs text-slate-500">Enter how much the gym is paying for this month.</p>
+          </div>
+
+          <div>
+            <label htmlFor="fee-note" className="mb-1.5 block text-sm font-medium text-slate-700">
+              Note
+            </label>
+            <Input
+              id="fee-note"
+              type="text"
+              value={feeForm.note}
+              onChange={e => setFeeForm(f => ({ ...f, note: e.target.value }))}
+              placeholder="Optional (e.g. Easypaisa, cash)"
+            />
+          </div>
+
+          <label className="flex cursor-pointer items-center gap-3 rounded-xl bg-slate-50 p-3 ring-1 ring-slate-100 transition-colors hover:bg-slate-100">
+            <input
+              type="checkbox"
+              checked={feeForm.paid}
+              onChange={e => setFeeForm(f => ({ ...f, paid: e.target.checked }))}
+              className="h-4 w-4 rounded accent-[#1f6bff]"
+            />
+            <span className="text-sm text-slate-700">Paid (the gym has paid)</span>
+          </label>
+
+          {feeError && (
+            <div role="alert" className="rounded-xl border border-red-100 bg-red-50 p-3 text-sm text-red-700">
+              {feeError}
+            </div>
+          )}
+        </form>
+      </Modal>
+
+      {/* Confirm modal */}
+      <Modal
+        open={!!confirmState}
+        onClose={cancelConfirm}
+        dismissible={!confirmBusy}
+        title={confirmState?.title ?? ''}
+        size="md"
+        footer={
+          <>
+            <Button type="button" variant="outline" onClick={cancelConfirm} disabled={confirmBusy}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant={confirmState?.danger ? 'destructive' : 'default'}
+              onClick={() => void runConfirm()}
+              disabled={confirmBusy}
+            >
+              {confirmBusy ? 'Please wait...' : confirmState?.confirmLabel}
+            </Button>
+          </>
+        }
+      >
+        <div className="flex items-start gap-3">
+          <div
+            className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${
+              confirmState?.danger ? 'bg-red-50' : 'bg-brand-soft'
+            }`}
+          >
+            <AlertTriangle className={`h-5 w-5 ${confirmState?.danger ? 'text-red-600' : 'text-brand'}`} />
+          </div>
+          <p className="pt-1 text-sm leading-relaxed text-slate-600">{confirmState?.message}</p>
+        </div>
+        {confirmState?.askReason && (
+          <Input
+            type="text"
+            value={reason}
+            onChange={e => setReason(e.target.value)}
+            className="mt-4"
+            placeholder="Reason (optional)"
+            aria-label="Reason"
+          />
+        )}
+        {confirmState?.expiry && (
+          <div className="mt-4">
+            <label htmlFor="confirm-expiry" className="mb-1.5 block text-sm font-medium text-slate-700">
+              {confirmState.expiry === 'required' ? 'New expiry date *' : 'Expiry date (optional)'}
+            </label>
+            <Input
+              id="confirm-expiry"
+              type="date"
+              value={expiryDate}
+              min={confirmState.expiry === 'required' ? pkToday() : undefined}
+              onChange={e => {
+                setExpiryDate(e.target.value)
+                setConfirmError(null)
+              }}
+            />
+          </div>
+        )}
+        {confirmError && (
+          <div role="alert" className="mt-3 rounded-xl border border-red-100 bg-red-50 p-3 text-sm text-red-700">
+            {confirmError}
+          </div>
+        )}
+      </Modal>
+    </AppShell>
   )
 }

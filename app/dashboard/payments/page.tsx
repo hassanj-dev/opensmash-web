@@ -86,7 +86,7 @@ function emptyForm(): FormState {
   }
 }
 
-// Plan ka label sirf duration se: Monthly / Quarterly / Half Yearly / Yearly
+// Plan label comes from the duration only: Monthly / Quarterly / Half Yearly / Yearly
 function planLabel(months: number) {
   if (months === 1) return 'Monthly'
   if (months === 3) return 'Quarterly'
@@ -182,7 +182,7 @@ export default function PaymentsPage() {
         data: { user }
       } = await supabase.auth.getUser()
       if (!user) {
-        setError('Aap login nahi hain. Dobara login karein.')
+        setError('You are not logged in. Please log in again.')
         return
       }
       setUserId(user.id)
@@ -194,7 +194,7 @@ export default function PaymentsPage() {
         .single()
 
       if (userError || !userData?.gym_id) {
-        setError('Aapke account ke saath koi gym linked nahi hai.')
+        setError('No gym is linked to your account.')
         return
       }
 
@@ -216,7 +216,7 @@ export default function PaymentsPage() {
       setGymId(currentGymId)
     } catch (err) {
       console.error('Error loading payments page:', err)
-      setError('Page load nahi ho saka. Dobara koshish karein.')
+      setError('Could not load the page. Please try again.')
     } finally {
       setLoading(false)
     }
@@ -317,7 +317,7 @@ export default function PaymentsPage() {
     } catch (err) {
       if (requestId !== requestIdRef.current) return
       console.error('Error loading payments:', err)
-            if (!silent) setError('Payments load nahi ho sakin. Dobara koshish karein.')
+            if (!silent) setError('Could not load payments. Please try again.')
     } finally {
       if (requestId === requestIdRef.current) setListLoading(false)
     }
@@ -354,7 +354,7 @@ export default function PaymentsPage() {
     [members, form.memberId]
   )
 
-  // Dropdown mein active plans + (edit ke waqt) payment ka current plan, agar woh inactive ho
+  // Dropdown: active plans + (when editing) the payment's current plan, if that plan is inactive
   const planOptions = useMemo(
     () => plans.filter(p => p.is_active || p.id === form.planId),
     [plans, form.planId]
@@ -388,7 +388,7 @@ export default function PaymentsPage() {
     setFormError(null)
   }
 
-  // Plan select karne par amount mein plan ki price bhar do (tum badal sakte ho)
+  // When a plan is selected, fill the amount with the plan price (you can change it)
   function handlePlanChange(planId: string) {
     const plan = planId ? planMap.get(planId) : undefined
     setForm(f => ({
@@ -398,7 +398,7 @@ export default function PaymentsPage() {
     }))
   }
 
-  // Din wohi rakho to waqt bhi wohi; naya din ho to dopahar 12 baje (Pakistan time)
+  // Same day keeps the same time; a new day uses 12:00 noon (Pakistan time)
   function buildPaidAt(dateStr: string, original?: string) {
     if (original && pkToday(new Date(original)) === dateStr) return original
     if (dateStr === todayStr()) return new Date().toISOString()
@@ -410,20 +410,20 @@ export default function PaymentsPage() {
     if (!gymId || !userId) return
 
     if (!form.memberId) {
-      setFormError('Member select karein.')
+      setFormError('Please select a member.')
       return
     }
     if (!form.paidDate) {
-      setFormError('Date zaroori hai.')
+      setFormError('Date is required.')
       return
     }
     if (form.paidDate > todayStr()) {
-      setFormError('Aane wali date ki payment record nahi ho sakti.')
+      setFormError('A payment cannot be recorded for a future date.')
       return
     }
     const amount = Number(form.amount)
     if (form.amount.trim() === '' || !isValidAmount(amount)) {
-      setFormError('Amount 0 se zyada sahi number hona chahiye.')
+      setFormError('Amount must be a valid number greater than 0.')
       return
     }
 
@@ -447,7 +447,7 @@ export default function PaymentsPage() {
 
         if (updateError) throw updateError
         if (!data || data.length === 0) {
-          setFormError('Change save nahi hua. Sirf owner ya manager payment edit kar sakta hai.')
+          setFormError('The change was not saved. Only the owner or manager can edit a payment.')
           return
         }
 
@@ -457,7 +457,7 @@ export default function PaymentsPage() {
           old_amount: Number(editing.amount),
           new_amount: amount
         })
-        setNotice(`Payment ${editing.receipt_no} update ho gayi.`)
+        setNotice(`Payment ${editing.receipt_no} updated.`)
       } else {
         const { data, error: insertError } = await supabase
           .from('payments')
@@ -465,7 +465,7 @@ export default function PaymentsPage() {
             gym_id: gymId,
             member_id: form.memberId,
             plan_id: form.planId || null,
-            receipt_no: '', // khali chhodne par database trigger receipt number bana deta hai
+            receipt_no: '', // if left empty, the database trigger creates the receipt number
             amount,
             payment_method: form.paymentMethod,
             paid_at: buildPaidAt(form.paidDate),
@@ -483,7 +483,7 @@ export default function PaymentsPage() {
           member_id: form.memberId,
           amount
         })
-        setNotice(`Payment record ho gayi. Receipt: ${data?.receipt_no ?? '-'}`)
+        setNotice(`Payment recorded. Receipt: ${data?.receipt_no ?? '-'}`)
       }
 
       setFormOpen(false)
@@ -491,7 +491,7 @@ export default function PaymentsPage() {
       await loadPayments()
     } catch (err) {
       console.error('Error saving payment:', err)
-      setFormError('Payment save nahi ho saki. Dobara koshish karein.')
+      setFormError('Could not save the payment. Please try again.')
     } finally {
       setSaving(false)
     }
@@ -513,10 +513,10 @@ export default function PaymentsPage() {
 
     if (deleteError) {
       console.error('Error deleting payment:', deleteError)
-      setError('Payment delete nahi ho saki. Dobara koshish karein.')
+      setError('Could not delete the payment. Please try again.')
     } else if (!data || data.length === 0) {
       // RLS can block a delete without an error: nothing was removed
-      setError('Payment delete nahi hui. Sirf owner ya manager payment delete kar sakta hai.')
+      setError('The payment was not deleted. Only the owner or manager can delete a payment.')
     } else {
       void logAudit(gymId, userId, 'payment_deleted', {
         payment_id: deleteTarget.id,
@@ -525,7 +525,7 @@ export default function PaymentsPage() {
         amount: Number(deleteTarget.amount),
         paid_at: deleteTarget.paid_at
       })
-      setNotice(`Payment ${deleteTarget.receipt_no} delete ho gayi.`)
+      setNotice(`Payment ${deleteTarget.receipt_no} deleted.`)
       await loadPayments()
     }
     setDeleting(false)
@@ -605,7 +605,7 @@ export default function PaymentsPage() {
                   setSearchInput(e.target.value)
                   setPage(0)
                 }}
-                placeholder="Receipt, member ka naam, code ya phone"
+                placeholder="Receipt, member name, code or phone"
                 className={`${inputClass} pl-9`}
               />
             </div>
@@ -660,8 +660,8 @@ export default function PaymentsPage() {
           ) : payments.length === 0 ? (
             <p className="text-center text-gray-500 py-8">
               {totalCount === 0 && !search && methodFilter === 'all' && !monthFilter
-                ? 'Abhi koi payment nahi hai. "Add Payment" se pehli payment record karein.'
-                : 'Search ya filter se koi payment nahi mili.'}
+                ? 'No payments yet. Use "Add Payment" to record your first payment.'
+                : 'No payments match your search or filter.'}
             </p>
           ) : (
             <div className={`overflow-x-auto ${listLoading ? 'opacity-60' : ''}`}>
@@ -785,7 +785,7 @@ export default function PaymentsPage() {
                   disabled={!!editing}
                   className={`${inputClass} disabled:bg-gray-100`}
                 >
-                  <option value="">Member select karein</option>
+                  <option value="">Select a member</option>
                   {memberOptions.map(member => (
                     <option key={member.id} value={member.id}>
                       {member.name} ({member.code})
@@ -795,7 +795,7 @@ export default function PaymentsPage() {
                 </select>
                 {members.length === 0 && (
                   <p className="mt-1 text-xs text-gray-500">
-                    Abhi koi member nahi hai. Pehle Members page se member add karein.
+                    No members yet. Add a member from the Members page first.
                   </p>
                 )}
               </div>
@@ -875,8 +875,8 @@ export default function PaymentsPage() {
               </div>
 
               <p className="text-xs text-gray-500">
-                Yeh sirf payment record karta hai, member ki expiry date nahi badalta. Membership
-                barhane ke liye Members page par Renew button use karein.
+                This only records a payment; it does not change the member's expiry date. To extend
+                a membership, use the Renew button on the Members page.
               </p>
 
               {formError && (
@@ -904,12 +904,12 @@ export default function PaymentsPage() {
           <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
             <div className="mb-3 flex items-center gap-2">
               <AlertTriangle className="w-5 h-5 text-red-600" />
-              <h2 className="text-lg font-bold text-gray-900">Payment delete karein?</h2>
+              <h2 className="text-lg font-bold text-gray-900">Delete payment?</h2>
             </div>
             <p className="text-sm text-gray-700">
               Receipt <span className="font-medium">{deleteTarget.receipt_no}</span> (
-              {fmt(Number(deleteTarget.amount))}) delete ho jayegi aur revenue se bhi
-              kam ho jayegi. Yeh wapas nahi ho sakta. Audit log mein is ka record rahega.
+              {fmt(Number(deleteTarget.amount))}) will be deleted and subtracted from revenue.
+              This cannot be undone. A record of it stays in the audit log.
             </p>
             <div className="mt-5 flex justify-end gap-2">
               <Button

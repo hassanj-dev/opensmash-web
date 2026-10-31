@@ -1,0 +1,44 @@
+/* OpenSmash light dashboard polish.
+   Scoped to <main className="dashboard-main"> in layout.tsx, so it never
+   affects login/landing pages even though Next.js loads this as global CSS. */
+
+.dashboard-main { color: #1e293b; }
+.dashboard-main h1 { letter-spacing: -0.035em; }
+
+.dashboard-main .shadow-lg {
+  box-shadow: 0 8px 28px -18px rgba(15, 45, 95, .28), 0 1px 2px rgba(15, 45, 95, .04);
+}
+.dashboard-main .border-gray-200 { border-color: #e5edf8; }
+
+.dashboard-main table thead { background: #f7faff; }
+.dashboard-main table th { letter-spacing: .055em; }
+.dashboard-main table tbody tr { transition: background-color .16s ease; }
+
+/* Text-like fields only: leaves checkbox/radio/file inputs alone, and keeps
+   the existing focus:ring-* look consistent with the blue theme. */
+.dashboard-main input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+.dashboard-main select,
+.dashboard-main textarea { max-width: 100%; }
+
+.dashboard-main input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):focus,
+.dashboard-main select:focus,
+.dashboard-main textarea:focus {
+  outline: none;
+  border-color: #3d84ff;
+  box-shadow: 0 0 0 3px rgba(31, 107, 255, .12);
+}
+
+@media (max-width: 640px) {
+  .dashboard-main h1 { font-size: 1.65rem; line-height: 1.2; }
+  .dashboard-main table { font-size: .8125rem; }
+  /* Real Tailwind p-6 only (the old [class*="p-6"] also matched gap-6).
+     Shorthand padding on card/modal containers; stays out of grids. */
+  .dashboard-main .p-6 { padding: 1rem; }
+  /* Intentionally NO blanket grid-cols override: pages already use
+     grid-cols-1 + md:/lg: breakpoints, and the 2-column modal field pairs
+     should stay 2 columns on phones. */
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dashboard-main table tbody tr { transition: none; }
+}

@@ -1,7 +1,377 @@
 @import "tailwindcss";
-
+@theme inline {
+  --font-sans: var(--font-jakarta), ui-sans-serif, system-ui, sans-serif;
+}
 @layer base {
   body {
     font-feature-settings: "rlig" 1, "calt" 1;
   }
 }
+
+/* ============================================================
+   OpenSmash auth / marketing styles (additive, prefixed .cs-)
+   Dashboard does not use any of these classes.
+   ============================================================ */
+
+.cs-sky {
+  background:
+    radial-gradient(1200px 600px at 50% -10%, #ffffff66 0%, transparent 60%),
+    linear-gradient(180deg, #7fbcea 0%, #a9d4f3 38%, #d3e9f9 70%, #eef6fd 100%);
+}
+
+/* Drifting clouds */
+.cs-cloud {
+  position: absolute;
+  border-radius: 9999px;
+  background: radial-gradient(closest-side, #ffffffee, #ffffff00);
+  filter: blur(18px);
+  will-change: transform;
+}
+.cs-drift-a { animation: cs-drift 38s ease-in-out infinite alternate; }
+.cs-drift-b { animation: cs-drift 52s ease-in-out infinite alternate-reverse; }
+.cs-drift-c { animation: cs-drift 64s ease-in-out infinite alternate; }
+
+@keyframes cs-drift {
+  from { transform: translate3d(-4%, 0, 0) scale(1); }
+  to   { transform: translate3d(6%, -2%, 0) scale(1.08); }
+}
+
+/* Faint orbit arcs behind the card */
+.cs-orbit {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  border-radius: 9999px;
+  border: 1px solid #3d84ff40;
+  transform: translate(-50%, -50%);
+  animation: cs-orbit-pulse 7s ease-in-out infinite;
+}
+@keyframes cs-orbit-pulse {
+  0%, 100% { opacity: .45; transform: translate(-50%, -50%) scale(1); }
+  50%      { opacity: .9;  transform: translate(-50%, -50%) scale(1.025); }
+}
+
+/* Card entrance */
+.cs-card {
+  background: linear-gradient(180deg, #141b30f2 0%, #0b0f1cf5 100%);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  box-shadow:
+    0 1px 0 #ffffff14 inset,
+    0 0 0 1px #ffffff14,
+    0 30px 70px -20px #1f6bff40,
+    0 12px 24px -12px #000000aa;
+  animation: cs-rise .8s cubic-bezier(.2,.8,.2,1) both;
+}
+@keyframes cs-rise {
+  from { opacity: 0; transform: translateY(28px) scale(.97); filter: blur(6px); }
+  to   { opacity: 1; transform: none; filter: blur(0); }
+}
+
+/* Staggered children */
+.cs-stagger > * {
+  animation: cs-fade-up .6s cubic-bezier(.2,.8,.2,1) both;
+}
+.cs-stagger > *:nth-child(1) { animation-delay: .18s; }
+.cs-stagger > *:nth-child(2) { animation-delay: .26s; }
+.cs-stagger > *:nth-child(3) { animation-delay: .34s; }
+.cs-stagger > *:nth-child(4) { animation-delay: .42s; }
+.cs-stagger > *:nth-child(5) { animation-delay: .50s; }
+.cs-stagger > *:nth-child(6) { animation-delay: .58s; }
+@keyframes cs-fade-up {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* Icon tile float */
+.cs-tile {
+  background: linear-gradient(180deg, #2f78ff 0%, #0a5cff 100%);
+  box-shadow: 0 0 0 1px #ffffff26, 0 10px 22px -6px #1f6bff99, 0 1px 0 #ffffff40 inset;
+  animation: cs-float 5s ease-in-out infinite;
+}
+@keyframes cs-float {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-4px); }
+}
+
+/* Inputs */
+.cs-field {
+  background: #ffffff0f;
+  border: 1px solid #ffffff14;
+  transition: background-color .2s, border-color .2s, box-shadow .2s, transform .2s;
+}
+.cs-field:hover { background: #ffffff17; }
+.cs-field:focus-within {
+  background: #ffffff14;
+  border-color: #3d84ff;
+  box-shadow: 0 0 0 4px #1f6bff33, 0 6px 16px -8px #1f6bff66;
+  transform: translateY(-1px);
+}
+
+/* Primary button with sheen */
+.cs-btn {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(180deg, #2f78ff 0%, #0a5cff 100%);
+  box-shadow: 0 1px 0 #ffffff40 inset, 0 12px 26px -8px #1f6bffbb;
+  transition: transform .2s, box-shadow .2s, opacity .2s;
+}
+.cs-btn::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(110deg, transparent 30%, #ffffff30 50%, transparent 70%);
+  transform: translateX(-120%);
+}
+.cs-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 1px 0 #ffffff33 inset, 0 16px 26px -10px #0f1115cc;
+}
+.cs-btn:hover:not(:disabled)::after { animation: cs-sheen .9s ease; }
+.cs-btn:active:not(:disabled) { transform: translateY(0) scale(.99); }
+@keyframes cs-sheen { to { transform: translateX(120%); } }
+
+/* Error shake */
+.cs-shake { animation: cs-shake .45s cubic-bezier(.36,.07,.19,.97) both; }
+@keyframes cs-shake {
+  10%, 90% { transform: translateX(-1px); }
+  20%, 80% { transform: translateX(2px); }
+  30%, 50%, 70% { transform: translateX(-4px); }
+  40%, 60% { transform: translateX(4px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cs-cloud, .cs-orbit, .cs-card, .cs-stagger > *, .cs-tile, .cs-shake,
+  .cs-btn:hover::after {
+    animation: none !important;
+  }
+}
+
+/* ============================================================
+   OpenSmash front page (.cs-*) : blue + black theme
+   Brand blue = #1f6bff, light blue = #3d84ff / #4d8dff, black = #05070d
+   ============================================================ */
+
+html { scroll-behavior: smooth; }
+
+.cs-reveal {
+  opacity: 0;
+  transform: translateY(24px);
+  transition: opacity .7s cubic-bezier(.2,.8,.2,1), transform .7s cubic-bezier(.2,.8,.2,1);
+  transition-delay: var(--d, 0ms);
+}
+.cs-reveal.is-in { opacity: 1; transform: none; }
+
+.cs-hero-bg {
+  background:
+    radial-gradient(900px 500px at 78% 8%, #1f6bff44 0%, transparent 60%),
+    radial-gradient(700px 500px at 5% 95%, #0a4fe033 0%, transparent 60%),
+    #05070d;
+}
+.cs-grid-lines {
+  background-image:
+    linear-gradient(#ffffff0d 1px, transparent 1px),
+    linear-gradient(90deg, #ffffff0d 1px, transparent 1px);
+  background-size: 56px 56px;
+  mask-image: radial-gradient(ellipse at 50% 30%, #000 20%, transparent 75%);
+  -webkit-mask-image: radial-gradient(ellipse at 50% 30%, #000 20%, transparent 75%);
+}
+
+/* Gradient text for the hero accent word (logo-like blue) */
+.cs-text-grad {
+  background: linear-gradient(90deg, #6aa2ff 0%, #1f6bff 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Blue gradient card, same feel as the logo background */
+.cs-blue-card {
+  background:
+    radial-gradient(600px 300px at 15% 0%, #8ab8ff66 0%, transparent 65%),
+    linear-gradient(180deg, #2f78ff 0%, #0a5cff 55%, #0546c9 100%);
+}
+
+.cs-lime-btn {
+  position: relative;
+  overflow: hidden;
+  transition: transform .2s, box-shadow .2s;
+  box-shadow: 0 10px 30px -10px #1f6bffaa;
+}
+.cs-lime-btn:hover { transform: translateY(-2px); box-shadow: 0 16px 36px -10px #1f6bffdd; }
+.cs-lime-btn:active { transform: scale(.98); }
+
+.cs-bar {
+  transform-origin: bottom;
+  animation: cs-grow 1.2s cubic-bezier(.2,.8,.2,1) both, cs-breathe 4s ease-in-out 1.4s infinite;
+  animation-delay: var(--bd, 0ms), calc(var(--bd, 0ms) + 1.4s);
+}
+@keyframes cs-grow { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+@keyframes cs-breathe { 0%,100% { transform: scaleY(1); } 50% { transform: scaleY(.88); } }
+
+.cs-float-a { animation: cs-float 6s ease-in-out infinite; }
+.cs-float-b { animation: cs-float 7.5s ease-in-out -2s infinite; }
+
+.cs-marquee { animation: cs-marquee 28s linear infinite; }
+@keyframes cs-marquee { to { transform: translateX(-50%); } }
+
+.cs-bento {
+  transition: transform .35s cubic-bezier(.2,.8,.2,1), background-color .35s, box-shadow .35s;
+}
+.cs-bento:hover { transform: translateY(-4px); background-color: #151c33; }
+.cs-bento:hover .cs-bento-icon { transform: rotate(-8deg) scale(1.08); }
+.cs-bento-icon { transition: transform .35s cubic-bezier(.2,.8,.2,1); }
+
+.cs-pulse-dot { animation: cs-ping 2s cubic-bezier(0,0,.2,1) infinite; }
+@keyframes cs-ping { 75%, 100% { transform: scale(2.4); opacity: 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .cs-reveal { opacity: 1; transform: none; transition: none; }
+  .cs-bar, .cs-float-a, .cs-float-b, .cs-marquee, .cs-pulse-dot { animation: none !important; }
+}
+
+/* ============================================================
+   Auth background (Phase 2): same blue + black look as landing,
+   with a soft blue glow like the logo background.
+   ============================================================ */
+
+.cs-auth-bg {
+  position: relative;
+  isolation: isolate;
+  background:
+    radial-gradient(900px 500px at 50% -10%, #3d84ff66 0%, transparent 60%),
+    radial-gradient(700px 500px at 100% 100%, #0a4fe044 0%, transparent 60%),
+    #05070d;
+}
+.cs-auth-bg::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background-image:
+    linear-gradient(#ffffff0d 1px, transparent 1px),
+    linear-gradient(90deg, #ffffff0d 1px, transparent 1px);
+  background-size: 56px 56px;
+  mask-image: radial-gradient(ellipse at 50% 30%, #000 20%, transparent 75%);
+  -webkit-mask-image: radial-gradient(ellipse at 50% 30%, #000 20%, transparent 75%);
+}
+
+/* ---- Add to the END of globals.css ---- */
+
+/* Line chart animation */
+.cs-line {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: cs-draw 1.8s cubic-bezier(.2,.8,.2,1) .4s forwards;
+}
+.cs-area { opacity: 0; animation: cs-area-in 1s ease 1.2s forwards; }
+@keyframes cs-draw { to { stroke-dashoffset: 0; } }
+@keyframes cs-area-in { to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .cs-line { animation: none; stroke-dashoffset: 0; }
+  .cs-area { animation: none; opacity: 1; }
+}
+
+/* Chrome autofill: keep the dark field look and white text */
+.cs-field input:-webkit-autofill,
+.cs-field input:-webkit-autofill:hover,
+.cs-field input:-webkit-autofill:focus,
+.cs-field input:-webkit-autofill:active {
+  -webkit-text-fill-color: #ffffff;
+  caret-color: #ffffff;
+  transition: background-color 600000s ease-in-out 0s;
+}
+
+.cs-field input {
+  color-scheme: dark;
+}
+
+
+/* ============================================================
+   STAGE 1: add this block to the END of globals.css
+   Also DELETE the old header comment that says
+   "Dashboard does not use any of these classes."
+   ============================================================ */
+
+/* Brand tokens -> usable as bg-brand, text-brand-deep, bg-canvas, ring-brand ... */
+@theme {
+  --color-brand: #1f6bff;
+  --color-brand-light: #3d84ff;
+  --color-brand-deep: #0a5cff;
+  --color-brand-soft: #eaf1ff;
+  --color-canvas: #f6f7fb;
+}
+
+@layer components {
+  /* Primary button (light-theme version of .cs-btn) */
+  .cs-primary {
+    position: relative;
+    overflow: hidden;
+    background: linear-gradient(180deg, #2f78ff 0%, #0a5cff 100%);
+    box-shadow: 0 1px 0 #ffffff40 inset, 0 8px 18px -8px #1f6bff99;
+    transition: transform .2s, box-shadow .2s, filter .2s;
+  }
+  .cs-primary::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(110deg, transparent 30%, #ffffff33 50%, transparent 70%);
+    transform: translateX(-120%);
+    pointer-events: none;
+  }
+  .cs-primary:hover:not(:disabled) {
+    filter: brightness(1.05);
+    box-shadow: 0 1px 0 #ffffff40 inset, 0 12px 22px -10px #1f6bffcc;
+  }
+  .cs-primary:hover:not(:disabled)::after { animation: cs-sheen .9s ease; }
+
+  /* One page-load entrance per route (used by AppShell on <main>) */
+  .cs-enter {
+  animation: cs-fade-up .5s cubic-bezier(.2, .8, .2, 1) backwards;
+  animation-delay: var(--d, 0ms);
+}
+
+  /* Loading placeholder */
+  .cs-skeleton {
+    background: linear-gradient(90deg, #eef1f6 0%, #f8fafd 50%, #eef1f6 100%);
+    background-size: 200% 100%;
+    animation: cs-shimmer 1.4s linear infinite;
+  }
+
+  /* Modal + toast motion (answers a user action, so it stays) */
+  .cs-backdrop-in { animation: cs-fade-in .2s ease both; }
+  .cs-pop-in { animation: cs-pop .28s cubic-bezier(.2, .8, .2, 1) both; }
+  .cs-toast-in { animation: cs-slide-in .3s cubic-bezier(.2, .8, .2, 1) both; }
+}
+
+@keyframes cs-shimmer { to { background-position: -200% 0; } }
+@keyframes cs-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes cs-pop {
+  from { opacity: 0; transform: translateY(14px) scale(.98); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes cs-slide-in {
+  from { opacity: 0; transform: translateX(16px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cs-enter, .cs-skeleton, .cs-backdrop-in, .cs-pop-in, .cs-toast-in,
+  .cs-primary:hover::after {
+    animation: none !important;
+  }
+}
+
+/* ============================================================
+   STAGE 3: add to the END of globals.css (after the stage 1 block)
+   ============================================================ */
+
+/* Slim, quiet scrollbar for the sidebar nav (removes the chunky arrows on Windows) */
+.cs-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #d5dbe6 transparent;
+}
+.cs-scroll::-webkit-scrollbar { width: 6px; }
+.cs-scroll::-webkit-scrollbar-thumb { background: #d5dbe6; border-radius: 9999px; }
+.cs-scroll::-webkit-scrollbar-track { background: transparent; }

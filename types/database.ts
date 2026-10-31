@@ -33,6 +33,7 @@ export interface User {
   role: UserRole
   is_active: boolean
   must_change_password: boolean
+  avatar_url?: string | null
   created_at: string
   updated_at: string
 }
