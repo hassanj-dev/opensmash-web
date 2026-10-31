@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import { SpeedInsights } from "@vercel/speed-insights/next"
 import Landing from '@/components/ui/landing/landing'
 
 export const metadata: Metadata = {
@@ -8,5 +9,7 @@ export const metadata: Metadata = {
 }
 
 export default function HomePage() {
-  return <Landing />
+  <SpeedInsights/>
+  return <Landing /> 
+
 }
