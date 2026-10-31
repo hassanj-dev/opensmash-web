@@ -11,7 +11,7 @@ const jakarta = Plus_Jakarta_Sans({
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "OpenSmash - Gym Management",
+  title: "OpenSmash - Gym Management App",
   description: "Professional gym management system for multiple gym locations",
   manifest: "/manifest.json",
   icons: {
