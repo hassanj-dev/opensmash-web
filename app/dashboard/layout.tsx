@@ -14,7 +14,8 @@ import {
   FileText,
   DollarSign,
   Shield,
-  UserCog
+  UserCog,
+  Monitor
 } from 'lucide-react'
 import AppShell, { ShellNavItem } from '@/components/app/AppShell'
 import { ToastProvider } from '@/components/app/kit'
@@ -32,7 +33,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const router = useRouter()
   const pathname = usePathname()
   const [user, setUser] = useState<User | null>(null)
-  const [gymName, setGymName] = useState('IronGym')
+  const [gymName, setGymName] = useState('OpenSmash')
   const [currency, setCurrency] = useState('Rs')
   const [userLoading, setUserLoading] = useState(true)
 
@@ -149,6 +150,10 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
       { icon: FileText, label: 'Plans', href: '/dashboard/plans' },
       { icon: DollarSign, label: 'Expenses', href: '/dashboard/expenses' },
       { icon: TrendingUp, label: 'Reports', href: '/dashboard/reports' },
+    ] : []),
+    // Desktop app download: visible to every gym role
+    ...(user && user.role !== 'super_admin' ? [
+      { icon: Monitor, label: 'Desktop app', href: '/dashboard/download' },
     ] : []),
     ...(user?.role === 'gym_owner' ? [
       { icon: UserCog, label: 'Staff', href: '/dashboard/staff' },
