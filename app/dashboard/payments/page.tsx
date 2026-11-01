@@ -172,8 +172,9 @@ export default function PaymentsPage() {
   // Used to ignore results from outdated list requests
   const requestIdRef = useRef(0)
 
-  // RLS: only owner / manager can edit or delete payments
+  // Edit: owner + manager. Delete: owner only (the database enforces this too).
   const canManage = role === 'gym_owner' || role === 'manager'
+  const canDelete = role === 'gym_owner' || role === 'super_admin'
 
   const loadBase = useCallback(async () => {
     setError(null)
@@ -498,7 +499,7 @@ export default function PaymentsPage() {
   }
 
   async function handleDelete() {
-    if (!gymId || !userId || !deleteTarget) return
+    if (!gymId || !userId || !deleteTarget || !canDelete) return
     setDeleting(true)
     setError(null)
     setNotice(null)
@@ -513,10 +514,14 @@ export default function PaymentsPage() {
 
     if (deleteError) {
       console.error('Error deleting payment:', deleteError)
-      setError('Could not delete the payment. Please try again.')
+      setError(
+        deleteError.code === '42501'
+          ? 'Only the gym owner can delete a payment.'
+          : 'Could not delete the payment. Please try again.'
+      )
     } else if (!data || data.length === 0) {
       // RLS can block a delete without an error: nothing was removed
-      setError('The payment was not deleted. Only the owner or manager can delete a payment.')
+      setError('The payment was not deleted. Only the gym owner can delete a payment.')
     } else {
       void logAudit(gymId, userId, 'payment_deleted', {
         payment_id: deleteTarget.id,
@@ -711,13 +716,15 @@ export default function PaymentsPage() {
                               >
                                 <Pencil className="w-4 h-4" />
                               </button>
-                              <button
-                                onClick={() => setDeleteTarget(payment)}
-                                title="Delete"
-                                className="p-2 rounded-lg text-red-600 hover:bg-red-50"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
+                              {canDelete && (
+                                <button
+                                  onClick={() => setDeleteTarget(payment)}
+                                  title="Delete"
+                                  className="p-2 rounded-lg text-red-600 hover:bg-red-50"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              )}
                             </div>
                           </td>
                         )}
@@ -875,7 +882,7 @@ export default function PaymentsPage() {
               </div>
 
               <p className="text-xs text-gray-500">
-                This only records a payment; it does not change the member's expiry date. To extend
+                This only records a payment; it does not change the member&apos;s expiry date. To extend
                 a membership, use the Renew button on the Members page.
               </p>
 

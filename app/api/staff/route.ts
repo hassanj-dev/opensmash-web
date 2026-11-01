@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server'
+import { NextResponse, after } from 'next/server'
 import { createServerSupabaseClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { gymGate } from '@/lib/gym-access'
@@ -16,14 +16,17 @@ const fail = (message: string, status = 400) => NextResponse.json({ error: messa
 // Caller must be an ACTIVE gym_owner of an ACTIVE gym. Everything comes from the DB, never from the request body.
 async function requireOwner() {
   const sb = await createServerSupabaseClient()
-  const { data: { user } } = await sb.auth.getUser() // verified against the Auth server
-  if (!user) return { error: fail('Not signed in.', 401) }
+  // getClaims() verifies the JWT locally when the project uses asymmetric signing keys (no Auth-server round trip).
+  // Otherwise supabase-js falls back to asking the Auth server. is_active is still checked in the DB below.
+  const { data: claimsData } = await sb.auth.getClaims()
+  const userId = claimsData?.claims?.sub
+  if (!userId) return { error: fail('Not signed in.', 401) }
 
   const admin = createAdminClient()
   const { data: me } = await admin
     .from('users')
     .select('id, role, gym_id, is_active, gyms(status, expires_at)')
-    .eq('id', user.id)
+    .eq('id', userId)
     .single()
 
   if (!me || me.is_active === false) return { error: fail('Account disabled.', 403) }
@@ -93,20 +96,26 @@ export async function POST(req: Request) {
     return fail('Could not create the profile.', 500)
   }
 
-  await audit(admin, gymId, ownerId, 'staff_created', { target: created.user.id, email, role })
-  return NextResponse.json({ id: created.user.id }, { status: 201 })
+  // Audit runs after the response is sent, so the user doesn't wait for it.
+  const newId = created.user.id
+  after(() => audit(admin, gymId, ownerId, 'staff_created', { target: newId, email, role }))
+  return NextResponse.json({ id: newId }, { status: 201 })
 }
 
 // PATCH: { id, action: 'role' | 'deactivate' | 'activate' | 'reset_password', role?, password? }
 export async function PATCH(req: Request) {
-  const ctx = await requireOwner()
-  if ('error' in ctx) return ctx.error
   const body = await req.json().catch(() => null)
   const id = String(body?.id ?? '')
   const action = String(body?.action ?? '')
+
+  // Owner check and target lookup are independent, so run them together.
+  const [ctx, { data: target }] = await Promise.all([
+    requireOwner(),
+    createAdminClient().from('users').select('id, role, gym_id, email').eq('id', id).maybeSingle(),
+  ])
+  if ('error' in ctx) return ctx.error
   const { admin, gymId, ownerId } = ctx
 
-  const { data: target } = await admin.from('users').select('id, role, gym_id, email').eq('id', id).maybeSingle()
   if (!target || target.gym_id !== gymId) return fail('Staff member not found.', 404) // other gyms look like "not found"
   if (target.role === 'gym_owner' || target.role === 'super_admin') return fail('Owner accounts cannot be changed here.', 403)
   if (id === ownerId) return fail('You cannot change your own account here.', 403)
@@ -117,7 +126,7 @@ export async function PATCH(req: Request) {
     const { error } = await admin.from('users').update({ role }).eq('id', id)
     if (error) return fail('Could not change the role.', 500)
     await admin.auth.admin.updateUserById(id, { app_metadata: { role } })
-    await audit(admin, gymId, ownerId, 'staff_role_changed', { target: id, role })
+    after(() => audit(admin, gymId, ownerId, 'staff_role_changed', { target: id, role }))
     return NextResponse.json({ ok: true })
   }
 
@@ -128,7 +137,7 @@ export async function PATCH(req: Request) {
     // Ban at the Auth level too: blocks new logins AND token refresh (this is what stops the desktop).
     const { error: bErr } = await admin.auth.admin.updateUserById(id, { ban_duration: on ? 'none' : BAN_FOREVER })
     if (bErr) return fail('Profile updated, but the sign-in block failed. Try again.', 500)
-    await audit(admin, gymId, ownerId, on ? 'staff_activated' : 'staff_deactivated', { target: id })
+    after(() => audit(admin, gymId, ownerId, on ? 'staff_activated' : 'staff_deactivated', { target: id }))
     return NextResponse.json({ ok: true })
   }
 
@@ -142,7 +151,7 @@ export async function PATCH(req: Request) {
     })
     if (error) return fail('Could not reset the password.', 500)
     await admin.from('users').update({ must_change_password: true }).eq('id', id)
-    await audit(admin, gymId, ownerId, 'staff_password_reset', { target: id })
+    after(() => audit(admin, gymId, ownerId, 'staff_password_reset', { target: id }))
     return NextResponse.json({ ok: true })
   }
 

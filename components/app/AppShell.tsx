@@ -55,7 +55,7 @@ export function Avatar({
     <div
       aria-hidden
       className={cn(
-        'flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-b from-[#2f78ff] to-[#0a5cff] text-sm font-semibold text-white ring-2 ring-white',
+        'flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-linear-to-b from-[#2f78ff] to-brand-deep text-sm font-semibold text-white ring-2 ring-white',
         className
       )}
     >
@@ -172,7 +172,7 @@ export default function AppShell({
             const active = isActive(item)
             const content = (
               <>
-                <item.icon className={cn('h-[18px] w-[18px]', active ? 'text-brand' : 'text-slate-400 group-hover:text-slate-600')} />
+                <item.icon className={cn('h-4.5 w-4.5', active ? 'text-brand' : 'text-slate-400 group-hover:text-slate-600')} />
                 <span className="flex-1 text-left">{item.label}</span>
                 {item.badge !== undefined && (
                   <span

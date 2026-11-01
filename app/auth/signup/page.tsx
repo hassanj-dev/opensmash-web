@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import Logo from '@/components/Logo'
 import { signUp, MIN_PASSWORD_LENGTH } from '@/lib/auth'
+import Turnstile, { TURNSTILE_ENABLED } from '@/components/Turnstile'
 import {
   UserPlus,
   User,
@@ -24,8 +25,8 @@ function Shell({ children }: { children: React.ReactNode }) {
   return (
     <div className="cs-auth-bg flex min-h-dvh flex-col overflow-hidden text-white">
       <div aria-hidden className="pointer-events-none absolute inset-0 -z-10">
-        <div className="cs-orbit h-[620px] w-[620px] sm:h-[860px] sm:w-[860px]" />
-        <div className="cs-orbit h-[900px] w-[900px] sm:h-[1240px] sm:w-[1240px]" style={{ animationDelay: '-3s' }} />
+        <div className="cs-orbit h-155 w-155 sm:h-215 sm:w-215" />
+        <div className="cs-orbit h-225 w-225 sm:h-310 sm:w-310" style={{ animationDelay: '-3s' }} />
       </div>
 
       <header className="flex items-center justify-between gap-3 px-4 pt-4 sm:px-8 sm:pt-7">
@@ -33,7 +34,7 @@ function Shell({ children }: { children: React.ReactNode }) {
         <Link
           href="/"
           aria-label="Back to home"
-          className="flex h-11 w-11 shrink-0 items-center justify-center gap-2 rounded-full bg-white/10 text-white ring-1 ring-white/10 transition-all hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3d84ff] sm:h-10 sm:w-auto sm:rounded-xl sm:px-3.5 sm:text-sm sm:font-medium"
+          className="flex h-11 w-11 shrink-0 items-center justify-center gap-2 rounded-full bg-white/10 text-white ring-1 ring-white/10 transition-all hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-light sm:h-10 sm:w-auto sm:rounded-xl sm:px-3.5 sm:text-sm sm:font-medium"
         >
           <ArrowLeft className="h-5 w-5 sm:h-4 sm:w-4" />
           <span className="hidden sm:inline">Back to home</span>
@@ -55,6 +56,8 @@ export default function SignUpPage() {
     gymName: ''
   })
   const [loading, setLoading] = useState(false)
+  const [captchaToken, setCaptchaToken] = useState('')
+  const [captchaReset, setCaptchaReset] = useState(0)
   const [error, setError] = useState('')
   const [errorKey, setErrorKey] = useState(0)
   const [success, setSuccess] = useState(false)
@@ -100,7 +103,8 @@ export default function SignUpPage() {
         formData.email,
         formData.password,
         formData.fullName.trim(),
-        formData.gymName.trim()
+        formData.gymName.trim(),
+        captchaToken || undefined
       )
       setNeedsConfirm(!!result?.needsEmailConfirmation)
       setSuccess(true)
@@ -113,6 +117,7 @@ export default function SignUpPage() {
         }, 1500)
       }
     } catch (err: unknown) {
+      setCaptchaReset(k => k + 1) // a captcha token works only once
       console.error('Signup error:', err)
       // lib/auth.ts already returns clear messages
       fail((err as Error).message || 'Failed to create account. Please try again.')
@@ -124,7 +129,7 @@ export default function SignUpPage() {
   if (success) {
     return (
       <Shell>
-        <div className="cs-card w-full max-w-[420px] rounded-[28px] p-6 text-center sm:p-8">
+        <div className="cs-card w-full max-w-105 rounded-[28px] p-6 text-center sm:p-8">
           <div className="cs-stagger">
             <div className="flex justify-center">
               <div className="cs-tile flex h-14 w-14 items-center justify-center rounded-2xl">
@@ -156,7 +161,7 @@ export default function SignUpPage() {
                 <p className="mt-2 text-sm leading-relaxed text-white/60">
                   Your gym account has been created. Redirecting to dashboard...
                 </p>
-                <Loader2 className="mx-auto mt-5 h-6 w-6 animate-spin text-[#3d84ff]" />
+                <Loader2 className="mx-auto mt-5 h-6 w-6 animate-spin text-brand-light" />
               </>
             )}
           </div>
@@ -167,7 +172,7 @@ export default function SignUpPage() {
 
   return (
     <Shell>
-      <div className="cs-card w-full max-w-[420px] rounded-[28px] p-6 sm:p-8">
+      <div className="cs-card w-full max-w-105 rounded-[28px] p-6 sm:p-8">
         <div className="cs-stagger">
           <div className="flex justify-center">
             <div className="cs-tile flex h-12 w-12 items-center justify-center rounded-2xl">
@@ -179,7 +184,7 @@ export default function SignUpPage() {
             <h1 className="text-[22px] font-semibold tracking-tight text-white sm:text-2xl">
               Create your gym account
             </h1>
-            <p className="mx-auto mt-1.5 max-w-[300px] text-sm leading-relaxed text-white/55">
+            <p className="mx-auto mt-1.5 max-w-75 text-sm leading-relaxed text-white/55">
               Start managing your gym with OpenSmash.
             </p>
           </div>
@@ -262,7 +267,7 @@ export default function SignUpPage() {
                 type="button"
                 onClick={() => setShowPassword(s => !s)}
                 aria-label={showPassword ? 'Hide password' : 'Show password'}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-white/40 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3d84ff]"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-white/40 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-light"
               >
                 {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </button>
@@ -284,10 +289,12 @@ export default function SignUpPage() {
               />
             </label>
 
+            {TURNSTILE_ENABLED && <Turnstile onToken={setCaptchaToken} resetKey={captchaReset} />}
+
             <button
               type="submit"
-              disabled={loading}
-              className="cs-btn flex h-12 w-full items-center justify-center gap-2 rounded-2xl text-[15px] font-medium text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3d84ff] focus-visible:ring-offset-2 focus-visible:ring-offset-[#0b0f1c] disabled:cursor-not-allowed disabled:opacity-70"
+              disabled={loading || (TURNSTILE_ENABLED && !captchaToken)}
+              className="cs-btn flex h-12 w-full items-center justify-center gap-2 rounded-2xl text-[15px] font-medium text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-light focus-visible:ring-offset-2 focus-visible:ring-offset-[#0b0f1c] disabled:cursor-not-allowed disabled:opacity-70"
             >
               {loading ? (
                 <>
@@ -311,7 +318,7 @@ export default function SignUpPage() {
 
           <Link
             href="/auth/login"
-            className="mt-4 flex h-11 w-full items-center justify-center rounded-2xl bg-white/10 text-sm font-medium text-white ring-1 ring-white/10 transition-all hover:-translate-y-px hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3d84ff]"
+            className="mt-4 flex h-11 w-full items-center justify-center rounded-2xl bg-white/10 text-sm font-medium text-white ring-1 ring-white/10 transition-all hover:-translate-y-px hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-light"
           >
             Sign In
           </Link>

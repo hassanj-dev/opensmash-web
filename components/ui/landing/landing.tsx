@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 
 /* Brand blue (matches logo) */
-const BRAND = "bg-[#1f6bff] text-white";
+const BRAND = "bg-brand text-white";
 
 const NAV = [
   { href: "#features", label: "Features" },
@@ -126,7 +126,7 @@ export default function Landing() {
             {!signedIn && (
               <Link
                 href="/auth/signup"
-                className="hidden rounded-full bg-[#1f6bff] px-4 py-1.5 text-[13px] font-semibold text-white transition-transform hover:scale-[1.03] active:scale-95 sm:inline-block"
+                className="hidden rounded-full bg-brand px-4 py-1.5 text-[13px] font-semibold text-white transition-transform hover:scale-[1.03] active:scale-95 sm:inline-block"
               >
                 Get started
               </Link>
@@ -145,7 +145,7 @@ export default function Landing() {
         {/* Mobile menu */}
         <div
           className={`overflow-hidden transition-[max-height,opacity] duration-300 md:hidden ${
-            open ? "max-h-[420px] opacity-100" : "max-h-0 opacity-0"
+            open ? "max-h-105 opacity-100" : "max-h-0 opacity-0"
           }`}
         >
           <div className="space-y-1 border-t border-white/10 px-4 pb-6 pt-3">
@@ -184,8 +184,8 @@ export default function Landing() {
           <div>
             <div className="cs-reveal inline-flex max-w-full items-center gap-2 rounded-full border border-white/10 bg-white/5 py-1.5 pl-2.5 pr-3.5 text-[11px] text-white/80">
               <span className="relative flex h-2 w-2 shrink-0">
-                <span className="cs-pulse-dot absolute inline-flex h-full w-full rounded-full bg-[#3d84ff]" />
-                <span className="relative inline-flex h-2 w-2 rounded-full bg-[#3d84ff]" />
+                <span className="cs-pulse-dot absolute inline-flex h-full w-full rounded-full bg-brand-light" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-brand-light" />
               </span>
               Web dashboard + offline-first desktop app
             </div>
@@ -239,7 +239,7 @@ export default function Landing() {
                 "Syncs with desktop",
               ].map((t) => (
                 <li key={t} className="flex items-center gap-2">
-                  <Check className="h-4 w-4 text-[#3d84ff]" /> {t}
+                  <Check className="h-4 w-4 text-brand-light" /> {t}
                 </li>
               ))}
             </ul>
@@ -250,7 +250,7 @@ export default function Landing() {
             className="cs-reveal relative mx-auto w-full max-w-lg"
             style={{ ["--d" as string]: "200ms" }}
           >
-            <div className="cs-float-a rounded-[24px] border border-white/10 bg-[#0e1320] p-3.5 shadow-2xl shadow-[#1f6bff]/10 sm:rounded-[28px] sm:p-5">
+            <div className="cs-float-a rounded-3xl border border-white/10 bg-[#0e1320] p-3.5 shadow-2xl shadow-brand/10 sm:rounded-[28px] sm:p-5">
               <div className="flex items-center justify-between">
                 <div className="flex gap-1.5">
                   <span className="h-2.5 w-2.5 rounded-full bg-white/15" />
@@ -270,9 +270,9 @@ export default function Landing() {
                 ].map((c) => (
                   <div
                     key={c.k}
-                    className="min-w-0 rounded-2xl bg-white/[0.06] p-2.5 sm:p-3"
+                    className="min-w-0 rounded-2xl bg-white/6 p-2.5 sm:p-3"
                   >
-                    <c.i className="h-4 w-4 text-[#3d84ff]" />
+                    <c.i className="h-4 w-4 text-brand-light" />
                     <p className="mt-3 truncate text-[10px] text-white/45 sm:text-[11px]">
                       {c.k}
                     </p>
@@ -283,10 +283,10 @@ export default function Landing() {
                 ))}
               </div>
 
-              <div className="mt-3 rounded-2xl bg-white/[0.06] p-3.5 sm:p-4">
+              <div className="mt-3 rounded-2xl bg-white/6 p-3.5 sm:p-4">
                 <div className="flex items-center justify-between text-xs text-white/50">
                   <span>Weekly attendance</span>
-                  <span className="text-[#3d84ff]">live</span>
+                  <span className="text-brand-light">live</span>
                 </div>
                 <div className="mt-4">
                   <AttendanceLineChart />
@@ -297,7 +297,7 @@ export default function Landing() {
             {/* Floating cards */}
             <div className="cs-float-b absolute -bottom-6 -left-2 hidden w-52 rounded-2xl bg-white p-3.5 text-black shadow-xl sm:block lg:-left-10">
               <div className="flex items-center gap-2">
-                <MonitorSmartphone className="h-4 w-4 text-[#1f6bff]" />
+                <MonitorSmartphone className="h-4 w-4 text-brand" />
                 <p className="text-xs font-semibold">Desktop in sync</p>
               </div>
               <p className="mt-1.5 text-xs leading-snug text-black/60">
@@ -305,7 +305,7 @@ export default function Landing() {
                 connection is back.
               </p>
             </div>
-            <div className="cs-float-a absolute -right-2 -top-5 hidden rounded-2xl bg-[#1f6bff] px-4 py-3 text-white shadow-xl shadow-[#1f6bff]/30 sm:block lg:-right-6">
+            <div className="cs-float-a absolute -right-2 -top-5 hidden rounded-2xl bg-brand px-4 py-3 text-white shadow-xl shadow-brand/30 sm:block lg:-right-6">
               <p className="text-xs font-semibold">Receipts, auto-numbered</p>
               <p className="text-[11px] text-white/75">
                 per gym, every payment
@@ -331,7 +331,7 @@ export default function Landing() {
                 ].map((t) => (
                   <span key={`${r}-${t}`} className="flex items-center gap-12">
                     {t}
-                    <span className="h-1 w-1 rounded-full bg-[#3d84ff]" />
+                    <span className="h-1 w-1 rounded-full bg-brand-light" />
                   </span>
                 )),
               )}
@@ -348,7 +348,7 @@ export default function Landing() {
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="grid gap-8 lg:grid-cols-[1fr_1.6fr] lg:gap-16">
             <div className="cs-reveal">
-              <span className="inline-block rounded-full border border-[#1f6bff]/70 px-4 py-1.5 text-[13px] text-[#1f6bff]">
+              <span className="inline-block rounded-full border border-brand/70 px-4 py-1.5 text-[13px] text-brand">
                 Everything in one place
               </span>
               <h2 className="mt-5 text-[1.5rem] font-semibold leading-tight tracking-tight sm:text-3xl">
@@ -363,7 +363,7 @@ export default function Landing() {
                 className="mt-7 inline-flex items-center gap-2 rounded-full bg-[#05070d] py-1.5 pl-5 pr-1.5 text-[13px] font-medium text-white transition-transform hover:scale-[1.03]"
               >
                 Start now
-                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#1f6bff] text-white">
+                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-brand text-white">
                   <ArrowUpRight className="h-4 w-4" />
                 </span>
               </Link>
@@ -394,7 +394,7 @@ export default function Landing() {
               ].map((f, idx) => (
                 <div
                   key={f.t}
-                  className="cs-reveal group rounded-3xl bg-gray-50 p-5 ring-1 ring-black/5 transition-all duration-300 hover:-translate-y-1 hover:bg-[#eaf1ff] hover:shadow-lg sm:p-6"
+                  className="cs-reveal group rounded-3xl bg-gray-50 p-5 ring-1 ring-black/5 transition-all duration-300 hover:-translate-y-1 hover:bg-brand-soft hover:shadow-lg sm:p-6"
                   style={{ ["--d" as string]: `${idx * 80}ms` }}
                 >
                   <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[#05070d] text-[#4d8dff] transition-transform duration-300 group-hover:-rotate-6">
@@ -413,10 +413,10 @@ export default function Landing() {
 
       {/* ---------------- Bento ---------------- */}
       <section className="px-3 pb-3 sm:px-4 sm:pb-4">
-        <div className="mx-auto max-w-[96rem] rounded-[28px] bg-[#0a0d16] p-3 sm:rounded-[36px] sm:p-5">
+        <div className="mx-auto max-w-384 rounded-[28px] bg-[#0a0d16] p-3 sm:rounded-[36px] sm:p-5">
           <div className="grid auto-rows-[minmax(140px,auto)] gap-3 sm:gap-4 md:grid-cols-4 lg:grid-cols-6">
             <div className="cs-reveal cs-bento relative overflow-hidden rounded-3xl bg-[#111626] p-6 sm:p-8 md:col-span-4 lg:col-span-3 lg:row-span-2">
-              <MonitorSmartphone className="cs-bento-icon relative z-10 h-8 w-8 text-[#3d84ff]" />
+              <MonitorSmartphone className="cs-bento-icon relative z-10 h-8 w-8 text-brand-light" />
               <h3 className="relative z-10 mt-5 max-w-sm text-xl font-semibold leading-snug sm:text-2xl">
                 A desktop app that never stops working.
               </h3>
@@ -427,7 +427,7 @@ export default function Landing() {
               </p>
               <div
                 aria-hidden
-                className="pointer-events-none absolute -bottom-6 -right-3 select-none text-[7rem] font-black leading-none tracking-tighter text-[#1f6bff]/30 sm:-bottom-8 sm:-right-5 sm:text-[11rem] sm:text-[#1f6bff]/80"
+                className="pointer-events-none absolute -bottom-6 -right-3 select-none text-[7rem] font-black leading-none tracking-tighter text-brand/30 sm:-bottom-8 sm:-right-5 sm:text-[11rem] sm:text-brand/80"
               >
                 .C
               </div>
@@ -437,7 +437,7 @@ export default function Landing() {
               className="cs-reveal cs-bento rounded-3xl bg-[#111626] p-6 md:col-span-2 lg:col-span-3"
               style={{ ["--d" as string]: "80ms" }}
             >
-              <ShieldCheck className="cs-bento-icon h-7 w-7 text-[#3d84ff]" />
+              <ShieldCheck className="cs-bento-icon h-7 w-7 text-brand-light" />
               <h3 className="mt-4 text-[16px] font-semibold">
                 Secure by design
               </h3>
@@ -451,7 +451,7 @@ export default function Landing() {
               className="cs-reveal cs-bento rounded-3xl bg-[#111626] p-6 md:col-span-2 lg:col-span-3"
               style={{ ["--d" as string]: "160ms" }}
             >
-              <Building2 className="cs-bento-icon h-7 w-7 text-[#3d84ff]" />
+              <Building2 className="cs-bento-icon h-7 w-7 text-brand-light" />
               <h3 className="mt-4 text-[16px] font-semibold">
                 Multi-gym platform
               </h3>
@@ -475,7 +475,7 @@ export default function Landing() {
                 className="group inline-flex h-11 w-full items-center justify-between gap-3 rounded-full bg-black pl-6 pr-1.5 text-[13px] font-semibold text-white sm:w-fit"
               >
                 Create account
-                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#1f6bff] text-white transition-transform group-hover:rotate-45">
+                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-brand text-white transition-transform group-hover:rotate-45">
                   <ArrowUpRight className="h-4 w-4" />
                 </span>
               </Link>
@@ -491,7 +491,7 @@ export default function Landing() {
       >
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="cs-reveal max-w-2xl">
-            <span className="inline-block rounded-full border border-[#1f6bff]/70 px-4 py-1.5 text-[13px] text-[#1f6bff]">
+            <span className="inline-block rounded-full border border-brand/70 px-4 py-1.5 text-[13px] text-brand">
               How it works
             </span>
             <h2 className="mt-5 text-[1.5rem] font-semibold tracking-tight sm:text-3xl">
@@ -521,7 +521,7 @@ export default function Landing() {
                 className="cs-reveal relative overflow-hidden rounded-3xl bg-gray-50 p-6 ring-1 ring-black/5 sm:p-7"
                 style={{ ["--d" as string]: `${i * 100}ms` }}
               >
-                <span className="text-5xl font-semibold tracking-tighter text-[#1f6bff]/15">
+                <span className="text-5xl font-semibold tracking-tighter text-brand/15">
                   {s.n}
                 </span>
                 <h3 className="mt-3 text-lg font-semibold">{s.t}</h3>
@@ -565,7 +565,7 @@ export default function Landing() {
                 className="cs-reveal cs-bento rounded-3xl bg-[#0e1320] p-6 ring-1 ring-white/5 sm:p-7"
                 style={{ ["--d" as string]: `${i * 90}ms` }}
               >
-                <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#1f6bff] text-sm font-bold text-white">
+                <div className="flex h-9 w-9 items-center justify-center rounded-full bg-brand text-sm font-bold text-white">
                   {x.r[0]}
                 </div>
                 <h3 className="mt-4 text-[16px] font-semibold">{x.r}</h3>
@@ -578,7 +578,7 @@ export default function Landing() {
 
       {/* ---------------- CTA ---------------- */}
       <section id="start" className="scroll-mt-16 px-3 pb-3 sm:px-4 sm:pb-4">
-        <div className="cs-blue-card relative mx-auto max-w-[96rem] overflow-hidden rounded-[28px] px-5 py-12 text-center text-white sm:rounded-[36px] sm:px-6 sm:py-20">
+        <div className="cs-blue-card relative mx-auto max-w-384 overflow-hidden rounded-[28px] px-5 py-12 text-center text-white sm:rounded-[36px] sm:px-6 sm:py-20">
           <div
             aria-hidden
             className="cs-float-b absolute -left-16 -top-16 h-56 w-56 rounded-full bg-white/25 blur-2xl"

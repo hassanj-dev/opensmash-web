@@ -75,7 +75,6 @@ interface NavDef {
   label: string
   icon: ShellNavItem['icon']
   key: SectionKey
-  target: string // element id to scroll to ('top' = page top)
   tab?: TabKey
   badge?: number
 }
@@ -114,8 +113,10 @@ const PAGE_SIZE = 8
 const MAX_AMOUNT = 1_000_000_000
 const EXPIRY_WARNING_DAYS = 14
 
-const GYM_COLUMNS =
-  'id, name, owner_name, owner_email, phone, status, created_at, suspended_at, suspended_reason, expires_at, license_key'
+// license_key is hidden from normal table reads; super admin gets it from the
+// admin_list_gyms() database function (it refuses anyone who is not super_admin).
+const sortGyms = (list: GymRow[]) =>
+  [...list].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
 
 const statusTone: Record<string, PillTone> = {
   active: 'success',
@@ -225,7 +226,7 @@ function AdminDashboard() {
       setAllowed(true)
 
       const [gymsRes, subsRes] = await Promise.all([
-        supabase.from('gyms').select(GYM_COLUMNS).order('created_at', { ascending: false }),
+        supabase.rpc('admin_list_gyms'),
         supabase
           .from('gym_subscriptions')
           .select('id, gym_id, billing_month, amount, is_paid, paid_at, note')
@@ -234,7 +235,7 @@ function AdminDashboard() {
       ])
 
       if (gymsRes.error) throw gymsRes.error
-      setGyms((gymsRes.data as GymRow[]) || [])
+      setGyms(sortGyms((gymsRes.data as GymRow[]) || []))
 
       if (subsRes.error) {
         console.error('Error loading subscriptions:', subsRes.error)
@@ -256,16 +257,13 @@ function AdminDashboard() {
 
   // Reloads only the gyms list (used after status / expiry changes)
   const loadGyms = useCallback(async () => {
-    const { data, error: gymsError } = await supabase
-      .from('gyms')
-      .select(GYM_COLUMNS)
-      .order('created_at', { ascending: false })
+    const { data, error: gymsError } = await supabase.rpc('admin_list_gyms')
     if (gymsError) {
       console.error('Error reloading gyms:', gymsError)
       toast.error('The gyms list could not be reloaded. Please try again.')
       return
     }
-    setGyms((data as GymRow[]) || [])
+    setGyms(sortGyms((data as GymRow[]) || []))
   }, [toast])
 
   useEffect(() => {
@@ -703,7 +701,7 @@ function AdminDashboard() {
               <Skeleton className="h-9 w-56" />
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 {[1, 2, 3, 4].map(i => (
-                  <Skeleton key={i} className="h-[138px] rounded-2xl" />
+                  <Skeleton key={i} className="h-34.5 rounded-2xl" />
                 ))}
               </div>
               <Skeleton className="h-72 rounded-2xl" />
@@ -741,11 +739,11 @@ function AdminDashboard() {
   attention.sort((a, b) => a.rank - b.rank)
 
   const navDefs: NavDef[] = [
-    { label: 'Overview', icon: LayoutDashboard, key: 'overview', target: 'top' },
-    { label: 'All gyms', icon: Building2, key: 'gyms', target: 'gyms', tab: 'all', badge: stats.total },
-    { label: 'Pending approval', icon: Clock, key: 'gyms', target: 'gyms', tab: 'pending', badge: stats.pending },
-    { label: 'Unpaid fees', icon: Wallet, key: 'gyms', target: 'gyms', tab: 'unpaid', badge: stats.unpaidGyms },
-    { label: 'Revenue', icon: BarChart3, key: 'revenue', target: 'revenue' }
+    { label: 'Overview', icon: LayoutDashboard, key: 'overview' },
+    { label: 'All gyms', icon: Building2, key: 'gyms', tab: 'all', badge: stats.total },
+    { label: 'Pending approval', icon: Clock, key: 'gyms', tab: 'pending', badge: stats.pending },
+    { label: 'Unpaid fees', icon: Wallet, key: 'gyms', tab: 'unpaid', badge: stats.unpaidGyms },
+    { label: 'Revenue', icon: BarChart3, key: 'revenue' }
   ]
 
   function goTo(item: NavDef) {
@@ -754,14 +752,7 @@ function AdminDashboard() {
       setTab(item.tab)
       setPage(1)
     }
-    if (item.target === 'top') {
-      window.scrollTo({ top: 0, behavior: 'smooth' })
-      return
-    }
-    window.setTimeout(
-      () => document.getElementById(item.target)?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
-      60
-    )
+    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   const navItems: ShellNavItem[] = navDefs.map(d => ({
@@ -771,6 +762,48 @@ function AdminDashboard() {
     active: d.tab ? section === 'gyms' && tab === d.tab : section === d.key,
     onClick: () => goTo(d)
   }))
+
+  // Monthly revenue chart (used on both Overview and Revenue views)
+  const revenueChart = (
+    <Card className="xl:col-span-2">
+      <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3 space-y-0 pb-2">
+        <div>
+          <CardTitle className="text-base">Monthly revenue</CardTitle>
+          <p className="mt-1 text-xs text-slate-500">Last 6 months up to {monthLabel(month)}</p>
+        </div>
+        <div className="flex items-center gap-4 text-xs text-slate-500">
+          <span className="flex items-center gap-1.5">
+            <span className="h-2.5 w-2.5 rounded-full bg-brand" /> Collected
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="h-2.5 w-2.5 rounded-full bg-blue-200" /> Outstanding
+          </span>
+        </div>
+      </CardHeader>
+      <CardContent className="pt-4">
+        <div className="flex h-56 items-end justify-between gap-3 sm:gap-6">
+          {overview.rows.map(row => (
+            <div
+              key={row.key}
+              className="flex h-full min-w-0 flex-1 flex-col items-center justify-end gap-2"
+              title={`${monthLabel(row.key.slice(0, 7))}: collected ${formatCurrency(
+                row.collected
+              )}, outstanding ${formatCurrency(row.due)}`}
+            >
+              <div className="flex min-h-0 w-full max-w-14 flex-1 flex-col justify-end overflow-hidden rounded-xl bg-slate-100">
+                <div className="bg-blue-200" style={{ height: `${(row.due / overview.max) * 100}%` }} />
+                <div className="bg-brand" style={{ height: `${(row.collected / overview.max) * 100}%` }} />
+              </div>
+              <span className="text-xs font-medium text-slate-600">{monthLabel(row.key.slice(0, 7))}</span>
+              <span className="max-w-full truncate text-[11px] tabular-nums text-slate-400">
+                {formatCurrency(row.collected)}
+              </span>
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  )
 
   return (
     <AppShell
@@ -801,7 +834,7 @@ function AdminDashboard() {
       }
     >
       <PageHeader
-        title="Platform overview"
+        title={section === 'revenue' ? 'Revenue' : section === 'gyms' ? 'Gyms' : 'Platform overview'}
         description={`${stats.total} gyms on OpenSmash. Fees shown for ${monthLabel(month)}.`}
       />
 
@@ -818,552 +851,591 @@ function AdminDashboard() {
         </div>
       )}
 
-      {/* Stats */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          label="Total gyms"
-          value={stats.total}
-          hint={`${stats.active} active, ${stats.suspended} suspended`}
-          icon={Building2}
-        />
-        <StatCard
-          featured
-          label={`Collected (${monthLabel(month)})`}
-          value={formatCurrency(stats.collected)}
-          hint="Fees marked as paid"
-          icon={CheckCircle}
-        />
-        <StatCard
-          label={`Outstanding (${monthLabel(month)})`}
-          value={formatCurrency(stats.due)}
-          hint={`${stats.unpaidGyms} gyms have not paid yet`}
-          icon={Wallet}
-        />
-        <StatCard
-          label="Pending approval"
-          value={stats.pending}
-          hint="New gyms awaiting approval"
-          icon={Clock}
-        />
-      </div>
+      {/* ================= OVERVIEW ================= */}
+      {section === 'overview' && (
+        <>
+          {/* Stats */}
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <StatCard
+              label="Total gyms"
+              value={stats.total}
+              hint={`${stats.active} active, ${stats.suspended} suspended`}
+              icon={Building2}
+            />
+            <StatCard
+              featured
+              label={`Collected (${monthLabel(month)})`}
+              value={formatCurrency(stats.collected)}
+              hint="Fees marked as paid"
+              icon={CheckCircle}
+            />
+            <StatCard
+              label={`Outstanding (${monthLabel(month)})`}
+              value={formatCurrency(stats.due)}
+              hint={`${stats.unpaidGyms} gyms have not paid yet`}
+              icon={Wallet}
+            />
+            <StatCard
+              label="Pending approval"
+              value={stats.pending}
+              hint="New gyms awaiting approval"
+              icon={Clock}
+            />
+          </div>
 
-      {/* Needs attention (only shown when something needs a decision) */}
-      {attention.length > 0 && (
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <CalendarClock className="h-4 w-4 text-amber-600" />
-              Needs attention
-              <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold tabular-nums text-amber-700">
-                {attention.length}
-              </span>
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ul className="divide-y divide-slate-100">
-              {attention.slice(0, 5).map(item => (
-                <li key={`${item.gym.id}-${item.kind}`} className="flex flex-wrap items-center gap-3 py-3 first:pt-0 last:pb-0">
-                  <Avatar name={item.gym.name} className="h-9 w-9 text-xs" />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-slate-900">{item.gym.name}</p>
-                    <p className="truncate text-xs text-slate-500">{item.gym.owner_name}</p>
+          {/* Needs attention (only shown when something needs a decision) */}
+          {attention.length > 0 && (
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <CalendarClock className="h-4 w-4 text-amber-600" />
+                  Needs attention
+                  <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold tabular-nums text-amber-700">
+                    {attention.length}
+                  </span>
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <ul className="divide-y divide-slate-100">
+                  {attention.slice(0, 5).map(item => (
+                    <li key={`${item.gym.id}-${item.kind}`} className="flex flex-wrap items-center gap-3 py-3 first:pt-0 last:pb-0">
+                      <Avatar name={item.gym.name} className="h-9 w-9 text-xs" />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-slate-900">{item.gym.name}</p>
+                        <p className="truncate text-xs text-slate-500">{item.gym.owner_name}</p>
+                      </div>
+                      <StatusPill tone={item.kind === 'expiring' ? 'warning' : item.kind === 'expired' ? 'danger' : 'info'}>
+                        {item.label}
+                      </StatusPill>
+                      {item.kind === 'pending' ? (
+                        <Button size="sm" onClick={() => requestStatus(item.gym, 'active')}>
+                          Approve
+                        </Button>
+                      ) : (
+                        <Button size="sm" variant="outline" onClick={() => requestExpiry(item.gym)}>
+                          Set expiry
+                        </Button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+                {attention.length > 5 && (
+                  <p className="mt-3 text-xs text-slate-500">and {attention.length - 5} more. Open All gyms to see the rest.</p>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Revenue + status */}
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+            {revenueChart}
+
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">Gym status</CardTitle>
+                <p className="mt-1 text-xs text-slate-500">{stats.total} gyms in total</p>
+              </CardHeader>
+              <CardContent className="space-y-5 pt-4">
+                <div className="flex h-3 overflow-hidden rounded-full bg-slate-100">
+                  {statusRows.map(r => (
+                    <div
+                      key={r.label}
+                      className={r.dot}
+                      style={{ width: `${(r.count / Math.max(1, stats.total)) * 100}%` }}
+                    />
+                  ))}
+                </div>
+                <ul className="space-y-3 text-sm">
+                  {statusRows.map(r => (
+                    <li key={r.label} className="flex items-center justify-between">
+                      <span className="flex items-center gap-2 text-slate-600">
+                        <span className={`h-2.5 w-2.5 rounded-full ${r.dot}`} />
+                        {r.label}
+                      </span>
+                      <span className="font-semibold tabular-nums text-slate-900">{r.count}</span>
+                    </li>
+                  ))}
+                </ul>
+                <div className="rounded-2xl bg-canvas p-4 ring-1 ring-slate-200/70">
+                  <div className="mb-2 flex items-center justify-between text-xs">
+                    <span className="font-medium text-slate-600">Fees paid ({monthLabel(month)})</span>
+                    <span className="font-semibold tabular-nums text-slate-900">{paidPct}%</span>
                   </div>
-                  <StatusPill tone={item.kind === 'expiring' ? 'warning' : item.kind === 'expired' ? 'danger' : 'info'}>
-                    {item.label}
-                  </StatusPill>
-                  {item.kind === 'pending' ? (
-                    <Button size="sm" onClick={() => requestStatus(item.gym, 'active')}>
-                      Approve
-                    </Button>
-                  ) : (
-                    <Button size="sm" variant="outline" onClick={() => requestExpiry(item.gym)}>
-                      Set expiry
-                    </Button>
-                  )}
-                </li>
-              ))}
-            </ul>
-            {attention.length > 5 && (
-              <p className="mt-3 text-xs text-slate-500">and {attention.length - 5} more. Use the filters below.</p>
-            )}
-          </CardContent>
-        </Card>
+                  <div className="h-2 overflow-hidden rounded-full bg-slate-200">
+                    <div
+                      className="h-full rounded-full bg-emerald-500 transition-all duration-700"
+                      style={{ width: `${paidPct}%` }}
+                    />
+                  </div>
+                  <p className="mt-2 text-xs text-slate-500">
+                    {paidGyms} of {stats.total} gyms have paid
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </>
       )}
 
-      {/* Revenue + status */}
-      <div id="revenue" className="grid scroll-mt-24 grid-cols-1 gap-4 xl:grid-cols-3">
-        <Card className="xl:col-span-2">
-          <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3 space-y-0 pb-2">
-            <div>
-              <CardTitle className="text-base">Monthly revenue</CardTitle>
-              <p className="mt-1 text-xs text-slate-500">Last 6 months up to {monthLabel(month)}</p>
-            </div>
-            <div className="flex items-center gap-4 text-xs text-slate-500">
-              <span className="flex items-center gap-1.5">
-                <span className="h-2.5 w-2.5 rounded-full bg-brand" /> Collected
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="h-2.5 w-2.5 rounded-full bg-blue-200" /> Outstanding
-              </span>
-            </div>
-          </CardHeader>
-          <CardContent className="pt-4">
-            <div className="flex h-56 items-end justify-between gap-3 sm:gap-6">
-              {overview.rows.map(row => (
-                <div
-                  key={row.key}
-                  className="flex h-full min-w-0 flex-1 flex-col items-center justify-end gap-2"
-                  title={`${monthLabel(row.key.slice(0, 7))}: collected ${formatCurrency(
-                    row.collected
-                  )}, outstanding ${formatCurrency(row.due)}`}
-                >
-                  <div className="flex min-h-0 w-full max-w-[56px] flex-1 flex-col justify-end overflow-hidden rounded-xl bg-slate-100">
-                    <div className="bg-blue-200" style={{ height: `${(row.due / overview.max) * 100}%` }} />
-                    <div className="bg-brand" style={{ height: `${(row.collected / overview.max) * 100}%` }} />
-                  </div>
-                  <span className="text-xs font-medium text-slate-600">{monthLabel(row.key.slice(0, 7))}</span>
-                  <span className="max-w-full truncate text-[11px] tabular-nums text-slate-400">
-                    {formatCurrency(row.collected)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">Gym status</CardTitle>
-            <p className="mt-1 text-xs text-slate-500">{stats.total} gyms in total</p>
-          </CardHeader>
-          <CardContent className="space-y-5 pt-4">
-            <div className="flex h-3 overflow-hidden rounded-full bg-slate-100">
-              {statusRows.map(r => (
-                <div
-                  key={r.label}
-                  className={r.dot}
-                  style={{ width: `${(r.count / Math.max(1, stats.total)) * 100}%` }}
-                />
-              ))}
-            </div>
-            <ul className="space-y-3 text-sm">
-              {statusRows.map(r => (
-                <li key={r.label} className="flex items-center justify-between">
-                  <span className="flex items-center gap-2 text-slate-600">
-                    <span className={`h-2.5 w-2.5 rounded-full ${r.dot}`} />
-                    {r.label}
-                  </span>
-                  <span className="font-semibold tabular-nums text-slate-900">{r.count}</span>
-                </li>
-              ))}
-            </ul>
-            <div className="rounded-2xl bg-canvas p-4 ring-1 ring-slate-200/70">
-              <div className="mb-2 flex items-center justify-between text-xs">
-                <span className="font-medium text-slate-600">Fees paid ({monthLabel(month)})</span>
-                <span className="font-semibold tabular-nums text-slate-900">{paidPct}%</span>
-              </div>
-              <div className="h-2 overflow-hidden rounded-full bg-slate-200">
-                <div
-                  className="h-full rounded-full bg-emerald-500 transition-all duration-700"
-                  style={{ width: `${paidPct}%` }}
-                />
-              </div>
-              <p className="mt-2 text-xs text-slate-500">
-                {paidGyms} of {stats.total} gyms have paid
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Gyms list */}
-      <Card id="gyms" className="scroll-mt-24 p-4 sm:p-6">
-        <div className="mb-5">
-          <h2 className="text-base font-semibold tracking-tight text-slate-900">Gyms</h2>
-          <p className="text-xs text-slate-500">{filteredGyms.length} gyms found</p>
-        </div>
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div className="-mx-1 max-w-full overflow-x-auto px-1 py-1">
-            <div className="inline-flex gap-1 rounded-xl bg-slate-100 p-1">
-              {tabs.map(t => (
-                <button
-                  key={t.key}
-                  onClick={() => {
-                    setTab(t.key)
-                    setPage(1)
-                  }}
-                  className={`whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand ${
-                    tab === t.key ? 'bg-white text-brand-deep shadow-sm' : 'text-slate-500 hover:text-slate-900'
-                  }`}
-                >
-                  {t.label}{' '}
-                  <span className={`text-xs tabular-nums ${tab === t.key ? 'text-brand' : 'text-slate-400'}`}>
-                    ({t.count})
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="relative lg:w-80">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <Input
-              type="text"
-              value={search}
-              onChange={e => {
-                setSearch(e.target.value)
-                setPage(1)
-              }}
-              placeholder="Search by gym, owner or email"
-              aria-label="Search gyms"
-              className="pl-9"
+      {/* ================= REVENUE ================= */}
+      {section === 'revenue' && (
+        <>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <StatCard
+              featured
+              label={`Collected (${monthLabel(month)})`}
+              value={formatCurrency(stats.collected)}
+              hint="Fees marked as paid"
+              icon={CheckCircle}
+            />
+            <StatCard
+              label={`Outstanding (${monthLabel(month)})`}
+              value={formatCurrency(stats.due)}
+              hint={`${stats.unpaidGyms} gyms have not paid yet`}
+              icon={Wallet}
+            />
+            <StatCard
+              label="Collection rate"
+              value={`${paidPct}%`}
+              hint={`${paidGyms} of ${stats.total} gyms paid`}
+              icon={BarChart3}
             />
           </div>
-        </div>
 
-        <div className="mt-5">
-          {/* Sticky column header (desktop table only). Sticks just below the topbar */}
-          <div className="sticky top-[4.5rem] z-20 mb-2 hidden grid-cols-[2fr_1.6fr_1fr_1.2fr_80px_110px] gap-4 rounded-xl bg-slate-50/95 px-4 py-3 text-xs font-medium text-slate-500 ring-1 ring-slate-200/70 backdrop-blur xl:grid">
-            <span>Gym</span>
-            <span>Owner</span>
-            <span>Status</span>
-            <span>Fee ({monthLabel(month)})</span>
-            <span className="text-center">Paid</span>
-            <span className="text-right">Action</span>
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">{revenueChart}</div>
+
+          <Card className="p-4 sm:p-6">
+            <h2 className="text-base font-semibold tracking-tight text-slate-900">
+              Fees by gym ({monthLabel(month)})
+            </h2>
+            {gyms.length === 0 ? (
+              <p className="mt-4 rounded-xl border border-dashed border-slate-200 py-6 text-center text-sm text-slate-500">
+                There are no gyms yet.
+              </p>
+            ) : (
+              <ul className="mt-4 divide-y divide-slate-100">
+                {gyms.map(g => {
+                  const sub = subFor(g.id, monthKey)
+                  return (
+                    <li key={g.id} className="flex flex-wrap items-center gap-3 py-3">
+                      <Avatar name={g.name} className="h-9 w-9 text-xs" />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-slate-900">{g.name}</p>
+                        <p className="truncate text-xs text-slate-500">{g.owner_name}</p>
+                      </div>
+                      {sub ? (
+                        <>
+                          <span className="text-sm font-semibold tabular-nums text-slate-900">
+                            {formatCurrency(Number(sub.amount))}
+                          </span>
+                          <StatusPill tone={sub.is_paid ? 'success' : 'warning'}>
+                            {sub.is_paid ? 'Paid' : 'Unpaid'}
+                          </StatusPill>
+                        </>
+                      ) : (
+                        <Button size="sm" variant="outline" onClick={() => openFee(g, null)}>
+                          <Plus className="h-4 w-4" /> Set fee
+                        </Button>
+                      )}
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </Card>
+        </>
+      )}
+
+      {/* ================= GYMS ================= */}
+      {section === 'gyms' && (
+        <Card className="p-4 sm:p-6">
+          <div className="mb-5">
+            <h2 className="text-base font-semibold tracking-tight text-slate-900">Gyms</h2>
+            <p className="text-xs text-slate-500">{filteredGyms.length} gyms found</p>
           </div>
-
-          {pageGyms.length === 0 ? (
-            <EmptyState
-              icon={Building2}
-              title={gyms.length === 0 ? 'There are no gyms yet' : 'No gyms match this filter'}
-              description={
-                gyms.length === 0
-                  ? 'New gyms will appear here when owners sign up.'
-                  : 'Try another tab or a different search.'
-              }
-              action={
-                gyms.length > 0 && (tab !== 'all' || search) ? (
-                  <Button
-                    variant="outline"
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="-mx-1 max-w-full overflow-x-auto px-1 py-1">
+              <div className="inline-flex gap-1 rounded-xl bg-slate-100 p-1">
+                {tabs.map(t => (
+                  <button
+                    key={t.key}
                     onClick={() => {
-                      setTab('all')
-                      setSearch('')
+                      setTab(t.key)
                       setPage(1)
                     }}
-                  >
-                    Clear filters
-                  </Button>
-                ) : undefined
-              }
-            />
-          ) : (
-            <div className="space-y-3 xl:space-y-2">
-              {pageGyms.map(gym => {
-                const sub = subFor(gym.id, monthKey)
-                const selected = selectedId === gym.id
-                const expanded = expandedId === gym.id
-                const tone = statusTone[gym.status] || 'neutral'
-                const history = subsByGym.get(gym.id) || []
-                const totalPaid = history.filter(s => s.is_paid).reduce((sum, s) => sum + Number(s.amount), 0)
-                const totalDue = history.filter(s => !s.is_paid).reduce((sum, s) => sum + Number(s.amount), 0)
-                const paidMonths = history.filter(s => s.is_paid).length
-
-                const statusPill = <StatusPill tone={tone}>{gym.status}</StatusPill>
-
-                const feeCell = sub ? (
-                  <p className="font-semibold tabular-nums text-slate-900">{formatCurrency(Number(sub.amount))}</p>
-                ) : (
-                  <button
-                    onClick={e => {
-                      e.stopPropagation()
-                      openFee(gym, null)
-                    }}
-                    className="-ml-2 inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-brand transition-colors hover:bg-brand-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
-                  >
-                    <Plus className="h-3 w-3" /> Set fee
-                  </button>
-                )
-
-                const tickButton = (
-                  <button
-                    onClick={e => {
-                      e.stopPropagation()
-                      handleTick(gym)
-                    }}
-                    disabled={busyId === gym.id}
-                    aria-label={sub?.is_paid ? 'Paid. Click to remove the mark' : sub ? 'Mark as paid' : 'Set a fee first'}
-                    title={sub?.is_paid ? 'Paid. Click to remove the mark' : sub ? 'Mark as paid' : 'Set a fee first'}
-                    className={`flex h-8 w-8 items-center justify-center rounded-full border-2 text-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 disabled:opacity-50 ${
-                      sub?.is_paid
-                        ? 'border-emerald-500 bg-emerald-500 !text-white shadow-sm hover:bg-emerald-600'
-                        : sub
-                          ? 'border-slate-300 hover:border-emerald-500 hover:text-emerald-500'
-                          : 'border-dashed border-slate-300'
+                    className={`whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand ${
+                      tab === t.key ? 'bg-white text-brand-deep shadow-sm' : 'text-slate-500 hover:text-slate-900'
                     }`}
                   >
-                    <Check className="h-4 w-4" />
+                    {t.label}{' '}
+                    <span className={`text-xs tabular-nums ${tab === t.key ? 'text-brand' : 'text-slate-400'}`}>
+                      ({t.count})
+                    </span>
                   </button>
-                )
+                ))}
+              </div>
+            </div>
+            <div className="relative lg:w-80">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <Input
+                type="text"
+                value={search}
+                onChange={e => {
+                  setSearch(e.target.value)
+                  setPage(1)
+                }}
+                placeholder="Search by gym, owner or email"
+                aria-label="Search gyms"
+                className="pl-9"
+              />
+            </div>
+          </div>
 
-                const actionButtons = (
-                  <div className="flex items-center justify-end gap-1">
+          <div className="mt-5">
+            {/* Sticky column header (desktop table only). Sticks just below the topbar */}
+            <div className="sticky top-18 z-20 mb-2 hidden grid-cols-[2fr_1.6fr_1fr_1.2fr_80px_110px] gap-4 rounded-xl bg-slate-50/95 px-4 py-3 text-xs font-medium text-slate-500 ring-1 ring-slate-200/70 backdrop-blur xl:grid">
+              <span>Gym</span>
+              <span>Owner</span>
+              <span>Status</span>
+              <span>Fee ({monthLabel(month)})</span>
+              <span className="text-center">Paid</span>
+              <span className="text-right">Action</span>
+            </div>
+
+            {pageGyms.length === 0 ? (
+              <EmptyState
+                icon={Building2}
+                title={gyms.length === 0 ? 'There are no gyms yet' : 'No gyms match this filter'}
+                description={
+                  gyms.length === 0
+                    ? 'New gyms will appear here when owners sign up.'
+                    : 'Try another tab or a different search.'
+                }
+                action={
+                  gyms.length > 0 && (tab !== 'all' || search) ? (
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        setTab('all')
+                        setSearch('')
+                        setPage(1)
+                      }}
+                    >
+                      Clear filters
+                    </Button>
+                  ) : undefined
+                }
+              />
+            ) : (
+              <div className="space-y-3 xl:space-y-2">
+                {pageGyms.map(gym => {
+                  const sub = subFor(gym.id, monthKey)
+                  const selected = selectedId === gym.id
+                  const expanded = expandedId === gym.id
+                  const tone = statusTone[gym.status] || 'neutral'
+                  const history = subsByGym.get(gym.id) || []
+                  const totalPaid = history.filter(s => s.is_paid).reduce((sum, s) => sum + Number(s.amount), 0)
+                  const totalDue = history.filter(s => !s.is_paid).reduce((sum, s) => sum + Number(s.amount), 0)
+                  const paidMonths = history.filter(s => s.is_paid).length
+
+                  const statusPill = <StatusPill tone={tone}>{gym.status}</StatusPill>
+
+                  const feeCell = sub ? (
+                    <p className="font-semibold tabular-nums text-slate-900">{formatCurrency(Number(sub.amount))}</p>
+                  ) : (
                     <button
                       onClick={e => {
                         e.stopPropagation()
-                        openFee(gym, sub || null)
+                        openFee(gym, null)
                       }}
-                      title="Edit fee"
-                      aria-label="Edit fee"
-                      className={iconBtnClass}
+                      className="-ml-2 inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-brand transition-colors hover:bg-brand-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
                     >
-                      <Pencil className="h-4 w-4" />
+                      <Plus className="h-3 w-3" /> Set fee
                     </button>
+                  )
+
+                  const tickButton = (
                     <button
                       onClick={e => {
                         e.stopPropagation()
-                        setExpandedId(expanded ? null : gym.id)
+                        handleTick(gym)
                       }}
-                      title="History"
-                      aria-label="Show fee history"
-                      aria-expanded={expanded}
-                      className={iconBtnClass}
+                      disabled={busyId === gym.id}
+                      aria-label={sub?.is_paid ? 'Paid. Click to remove the mark' : sub ? 'Mark as paid' : 'Set a fee first'}
+                      title={sub?.is_paid ? 'Paid. Click to remove the mark' : sub ? 'Mark as paid' : 'Set a fee first'}
+                      className={`flex h-8 w-8 items-center justify-center rounded-full border-2 text-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 disabled:opacity-50 ${
+                        sub?.is_paid
+                          ? 'border-emerald-500 bg-emerald-500 text-white! shadow-sm hover:bg-emerald-600'
+                          : sub
+                            ? 'border-slate-300 hover:border-emerald-500 hover:text-emerald-500'
+                            : 'border-dashed border-slate-300'
+                      }`}
                     >
-                      <ChevronDown className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+                      <Check className="h-4 w-4" />
                     </button>
-                  </div>
-                )
+                  )
 
-                return (
-                  <div
-                    key={gym.id}
-                    className={`rounded-2xl ring-1 transition-all ${
-                      selected
-                        ? 'bg-brand-soft/50 shadow-sm ring-brand-light/60'
-                        : 'bg-white ring-slate-200 hover:bg-slate-50/70 hover:ring-slate-300'
-                    }`}
-                  >
-                    {/* Desktop row */}
-                    <div
-                      onClick={() => setSelectedId(selected ? null : gym.id)}
-                      className="hidden cursor-pointer grid-cols-[2fr_1.6fr_1fr_1.2fr_80px_110px] items-center gap-4 px-4 py-3.5 text-sm xl:grid"
-                    >
-                      <div className="flex min-w-0 items-center gap-3">
-                        <Avatar name={gym.name} className="h-9 w-9 text-xs" />
-                        <div className="min-w-0">
-                          <p className="truncate font-semibold text-slate-900">{gym.name}</p>
-                          <p className="text-xs text-slate-500">Joined {formatDate(gym.created_at)}</p>
-                        </div>
-                      </div>
-                      <div className="min-w-0">
-                        <p className="truncate text-slate-900">{gym.owner_name}</p>
-                        <p className="truncate text-xs text-slate-500">{gym.owner_email}</p>
-                      </div>
-                      <div>{statusPill}</div>
-                      <div>{feeCell}</div>
-                      <div className="flex justify-center">{tickButton}</div>
-                      {actionButtons}
+                  const actionButtons = (
+                    <div className="flex items-center justify-end gap-1">
+                      <button
+                        onClick={e => {
+                          e.stopPropagation()
+                          openFee(gym, sub || null)
+                        }}
+                        title="Edit fee"
+                        aria-label="Edit fee"
+                        className={iconBtnClass}
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={e => {
+                          e.stopPropagation()
+                          setExpandedId(expanded ? null : gym.id)
+                        }}
+                        title="History"
+                        aria-label="Show fee history"
+                        aria-expanded={expanded}
+                        className={iconBtnClass}
+                      >
+                        <ChevronDown className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+                      </button>
                     </div>
+                  )
 
-                    {/* Mobile / tablet stacked card */}
+                  return (
                     <div
-                      onClick={() => setSelectedId(selected ? null : gym.id)}
-                      className="cursor-pointer space-y-4 p-4 text-sm xl:hidden"
+                      key={gym.id}
+                      className={`rounded-2xl ring-1 transition-all ${
+                        selected
+                          ? 'bg-brand-soft/50 shadow-sm ring-brand-light/60'
+                          : 'bg-white ring-slate-200 hover:bg-slate-50/70 hover:ring-slate-300'
+                      }`}
                     >
-                      <div className="flex items-start justify-between gap-3">
+                      {/* Desktop row */}
+                      <div
+                        onClick={() => setSelectedId(selected ? null : gym.id)}
+                        className="hidden cursor-pointer grid-cols-[2fr_1.6fr_1fr_1.2fr_80px_110px] items-center gap-4 px-4 py-3.5 text-sm xl:grid"
+                      >
                         <div className="flex min-w-0 items-center gap-3">
-                          <Avatar name={gym.name} className="h-10 w-10 text-sm" />
+                          <Avatar name={gym.name} className="h-9 w-9 text-xs" />
                           <div className="min-w-0">
-                            <p className="truncate text-base font-semibold text-slate-900">{gym.name}</p>
+                            <p className="truncate font-semibold text-slate-900">{gym.name}</p>
                             <p className="text-xs text-slate-500">Joined {formatDate(gym.created_at)}</p>
                           </div>
                         </div>
-                        {statusPill}
-                      </div>
-
-                      <div className="min-w-0">
-                        <p className="mb-0.5 text-xs font-medium text-slate-500">Owner</p>
-                        <p className="truncate text-slate-900">{gym.owner_name}</p>
-                        <p className="truncate text-xs text-slate-500">{gym.owner_email}</p>
-                      </div>
-
-                      <div className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-3 py-2.5 ring-1 ring-slate-100">
                         <div className="min-w-0">
-                          <p className="mb-0.5 text-xs font-medium text-slate-500">Fee ({monthLabel(month)})</p>
-                          {feeCell}
+                          <p className="truncate text-slate-900">{gym.owner_name}</p>
+                          <p className="truncate text-xs text-slate-500">{gym.owner_email}</p>
                         </div>
-                        <div className="flex flex-col items-center gap-1">
-                          <span className="text-xs font-medium text-slate-500">Paid</span>
-                          {tickButton}
-                        </div>
+                        <div>{statusPill}</div>
+                        <div>{feeCell}</div>
+                        <div className="flex justify-center">{tickButton}</div>
                         {actionButtons}
                       </div>
-                    </div>
 
-                    {expanded && (
-                      <div className="rounded-b-2xl border-t border-slate-100 bg-white p-4 sm:p-5">
-                        <div className="mb-4 space-y-4">
-                          <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3 xl:grid-cols-6 [&>div]:rounded-xl [&>div]:bg-slate-50 [&>div]:p-3 [&>div]:ring-1 [&>div]:ring-slate-100">
-                            <div>
-                              <p className="text-xs text-slate-500">Collected to date</p>
-                              <p className="font-semibold tabular-nums text-emerald-600">{formatCurrency(totalPaid)}</p>
-                            </div>
-                            <div>
-                              <p className="text-xs text-slate-500">Outstanding</p>
-                              <p className="font-semibold tabular-nums text-orange-600">{formatCurrency(totalDue)}</p>
-                            </div>
-                            <div>
-                              <p className="text-xs text-slate-500">Average / month</p>
-                              <p className="font-semibold tabular-nums text-slate-900">
-                                {formatCurrency(paidMonths ? totalPaid / paidMonths : 0)}
-                              </p>
-                            </div>
-                            <div>
-                              <p className="text-xs text-slate-500">Phone</p>
-                              <p className="font-semibold text-slate-900">{gym.phone || '-'}</p>
-                            </div>
-                            <div>
-                              <p className="text-xs text-slate-500">License expires</p>
-                              <p className={`font-semibold ${isPast(gym.expires_at) ? 'text-red-600' : 'text-slate-900'}`}>
-                                {expiryLabel(gym.expires_at)}
-                              </p>
-                            </div>
-                            <div>
-                              <p className="text-xs text-slate-500">License key</p>
-                              <div className="flex items-center gap-1">
-                                <code className="select-all break-all font-mono text-xs font-semibold text-slate-900">
-                                  {gym.license_key || '-'}
-                                </code>
-                                {gym.license_key && (
-                                  <button
-                                    onClick={() => void copyKey(gym)}
-                                    title="Copy key"
-                                    aria-label="Copy license key"
-                                    className="rounded-lg p-1.5 text-slate-500 transition-colors hover:bg-slate-100 hover:text-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
-                                  >
-                                    <Copy className="h-4 w-4" />
-                                  </button>
-                                )}
-                              </div>
+                      {/* Mobile / tablet stacked card */}
+                      <div
+                        onClick={() => setSelectedId(selected ? null : gym.id)}
+                        className="cursor-pointer space-y-4 p-4 text-sm xl:hidden"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex min-w-0 items-center gap-3">
+                            <Avatar name={gym.name} className="h-10 w-10 text-sm" />
+                            <div className="min-w-0">
+                              <p className="truncate text-base font-semibold text-slate-900">{gym.name}</p>
+                              <p className="text-xs text-slate-500">Joined {formatDate(gym.created_at)}</p>
                             </div>
                           </div>
-                          <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-4">
-                            <Button size="sm" variant="outline" onClick={() => openFee(gym, null)}>
-                              <Plus className="h-4 w-4" /> Add month
-                            </Button>
-                            <Button size="sm" variant="outline" onClick={() => requestExpiry(gym)}>
-                              Set license expiry
-                            </Button>
-                            {gym.status === 'active' && (
-                              <Button size="sm" variant="destructive" onClick={() => requestStatus(gym, 'suspended')}>
-                                Suspend
-                              </Button>
-                            )}
-                            {(gym.status === 'suspended' || gym.status === 'pending') && (
-                              <Button size="sm" onClick={() => requestStatus(gym, 'active')}>
-                                {gym.status === 'pending' ? 'Approve' : 'Reactivate'}
-                              </Button>
-                            )}
-                          </div>
+                          {statusPill}
                         </div>
 
-                        {gym.suspended_at && gym.status === 'suspended' && (
-                          <div className="mb-4 rounded-xl border border-red-100 bg-red-50 p-3 text-xs text-red-800">
-                            <strong>Suspended:</strong> {formatDate(gym.suspended_at)}
-                            {gym.suspended_reason ? ` - ${gym.suspended_reason}` : ''}
-                          </div>
-                        )}
+                        <div className="min-w-0">
+                          <p className="mb-0.5 text-xs font-medium text-slate-500">Owner</p>
+                          <p className="truncate text-slate-900">{gym.owner_name}</p>
+                          <p className="truncate text-xs text-slate-500">{gym.owner_email}</p>
+                        </div>
 
-                        {history.length === 0 ? (
-                          <p className="rounded-xl border border-dashed border-slate-200 py-6 text-center text-sm text-slate-500">
-                            There are no fee records yet.
-                          </p>
-                        ) : (
-                          <div className="space-y-2">
-                            {history.map(s => (
-                              <div
-                                key={s.id}
-                                className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-xl bg-slate-50 px-3 py-2.5 text-sm ring-1 ring-slate-100 transition-colors hover:bg-slate-100/70"
-                              >
-                                <div className="min-w-0">
-                                  <p className="font-medium text-slate-900">{monthLabel(s.billing_month.slice(0, 7))}</p>
-                                  {s.note && <p className="text-xs text-slate-500">{s.note}</p>}
-                                </div>
-                                <div className="flex items-center gap-3">
-                                  <span className="font-semibold tabular-nums text-slate-900">
-                                    {formatCurrency(Number(s.amount))}
-                                  </span>
-                                  <StatusPill tone={s.is_paid ? 'success' : 'warning'}>
-                                    {s.is_paid ? `Paid${s.paid_at ? ` ${formatDate(s.paid_at)}` : ''}` : 'Unpaid'}
-                                  </StatusPill>
-                                  <div className="flex items-center gap-0.5">
+                        <div className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-3 py-2.5 ring-1 ring-slate-100">
+                          <div className="min-w-0">
+                            <p className="mb-0.5 text-xs font-medium text-slate-500">Fee ({monthLabel(month)})</p>
+                            {feeCell}
+                          </div>
+                          <div className="flex flex-col items-center gap-1">
+                            <span className="text-xs font-medium text-slate-500">Paid</span>
+                            {tickButton}
+                          </div>
+                          {actionButtons}
+                        </div>
+                      </div>
+
+                      {expanded && (
+                        <div className="rounded-b-2xl border-t border-slate-100 bg-white p-4 sm:p-5">
+                          <div className="mb-4 space-y-4">
+                            <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3 xl:grid-cols-6 [&>div]:rounded-xl [&>div]:bg-slate-50 [&>div]:p-3 [&>div]:ring-1 [&>div]:ring-slate-100">
+                              <div>
+                                <p className="text-xs text-slate-500">Collected to date</p>
+                                <p className="font-semibold tabular-nums text-emerald-600">{formatCurrency(totalPaid)}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-slate-500">Outstanding</p>
+                                <p className="font-semibold tabular-nums text-orange-600">{formatCurrency(totalDue)}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-slate-500">Average / month</p>
+                                <p className="font-semibold tabular-nums text-slate-900">
+                                  {formatCurrency(paidMonths ? totalPaid / paidMonths : 0)}
+                                </p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-slate-500">Phone</p>
+                                <p className="font-semibold text-slate-900">{gym.phone || '-'}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-slate-500">License expires</p>
+                                <p className={`font-semibold ${isPast(gym.expires_at) ? 'text-red-600' : 'text-slate-900'}`}>
+                                  {expiryLabel(gym.expires_at)}
+                                </p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-slate-500">License key</p>
+                                <div className="flex items-center gap-1">
+                                  <code className="select-all break-all font-mono text-xs font-semibold text-slate-900">
+                                    {gym.license_key || '-'}
+                                  </code>
+                                  {gym.license_key && (
                                     <button
-                                      onClick={() => openFee(gym, s)}
-                                      title="Edit"
-                                      aria-label="Edit fee record"
-                                      className="rounded-lg p-1.5 text-slate-500 transition-colors hover:bg-white hover:text-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+                                      onClick={() => void copyKey(gym)}
+                                      title="Copy key"
+                                      aria-label="Copy license key"
+                                      className="rounded-lg p-1.5 text-slate-500 transition-colors hover:bg-slate-100 hover:text-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
                                     >
-                                      <Pencil className="h-4 w-4" />
+                                      <Copy className="h-4 w-4" />
                                     </button>
-                                    <button
-                                      onClick={() => requestDeleteSub(gym, s)}
-                                      title="Delete"
-                                      aria-label="Delete fee record"
-                                      className="rounded-lg p-1.5 text-red-500 transition-colors hover:bg-red-50 hover:text-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-600"
-                                    >
-                                      <Trash2 className="h-4 w-4" />
-                                    </button>
-                                  </div>
+                                  )}
                                 </div>
                               </div>
-                            ))}
+                            </div>
+                            <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-4">
+                              <Button size="sm" variant="outline" onClick={() => openFee(gym, null)}>
+                                <Plus className="h-4 w-4" /> Add month
+                              </Button>
+                              <Button size="sm" variant="outline" onClick={() => requestExpiry(gym)}>
+                                Set license expiry
+                              </Button>
+                              {gym.status === 'active' && (
+                                <Button size="sm" variant="destructive" onClick={() => requestStatus(gym, 'suspended')}>
+                                  Suspend
+                                </Button>
+                              )}
+                              {(gym.status === 'suspended' || gym.status === 'pending') && (
+                                <Button size="sm" onClick={() => requestStatus(gym, 'active')}>
+                                  {gym.status === 'pending' ? 'Approve' : 'Reactivate'}
+                                </Button>
+                              )}
+                            </div>
                           </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
+
+                          {gym.suspended_at && gym.status === 'suspended' && (
+                            <div className="mb-4 rounded-xl border border-red-100 bg-red-50 p-3 text-xs text-red-800">
+                              <strong>Suspended:</strong> {formatDate(gym.suspended_at)}
+                              {gym.suspended_reason ? ` - ${gym.suspended_reason}` : ''}
+                            </div>
+                          )}
+
+                          {history.length === 0 ? (
+                            <p className="rounded-xl border border-dashed border-slate-200 py-6 text-center text-sm text-slate-500">
+                              There are no fee records yet.
+                            </p>
+                          ) : (
+                            <div className="space-y-2">
+                              {history.map(s => (
+                                <div
+                                  key={s.id}
+                                  className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-xl bg-slate-50 px-3 py-2.5 text-sm ring-1 ring-slate-100 transition-colors hover:bg-slate-100/70"
+                                >
+                                  <div className="min-w-0">
+                                    <p className="font-medium text-slate-900">{monthLabel(s.billing_month.slice(0, 7))}</p>
+                                    {s.note && <p className="text-xs text-slate-500">{s.note}</p>}
+                                  </div>
+                                  <div className="flex items-center gap-3">
+                                    <span className="font-semibold tabular-nums text-slate-900">
+                                      {formatCurrency(Number(s.amount))}
+                                    </span>
+                                    <StatusPill tone={s.is_paid ? 'success' : 'warning'}>
+                                      {s.is_paid ? `Paid${s.paid_at ? ` ${formatDate(s.paid_at)}` : ''}` : 'Unpaid'}
+                                    </StatusPill>
+                                    <div className="flex items-center gap-0.5">
+                                      <button
+                                        onClick={() => openFee(gym, s)}
+                                        title="Edit"
+                                        aria-label="Edit fee record"
+                                        className="rounded-lg p-1.5 text-slate-500 transition-colors hover:bg-white hover:text-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+                                      >
+                                        <Pencil className="h-4 w-4" />
+                                      </button>
+                                      <button
+                                        onClick={() => requestDeleteSub(gym, s)}
+                                        title="Delete"
+                                        aria-label="Delete fee record"
+                                        className="rounded-lg p-1.5 text-red-500 transition-colors hover:bg-red-50 hover:text-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-600"
+                                      >
+                                        <Trash2 className="h-4 w-4" />
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+
+          {filteredGyms.length > 0 && (
+            <div className="mt-6 flex flex-col items-center justify-between gap-3 border-t border-slate-100 pt-4 text-xs text-slate-500 sm:flex-row">
+              <span>
+                Showing {pageStart + 1}-{Math.min(pageStart + PAGE_SIZE, filteredGyms.length)} of {filteredGyms.length}
+              </span>
+              <div className="flex flex-wrap items-center justify-center gap-1">
+                <button
+                  onClick={() => setPage(Math.max(1, safePage - 1))}
+                  disabled={safePage === 1}
+                  className="rounded-lg p-1.5 transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand disabled:opacity-40 disabled:hover:bg-transparent"
+                  aria-label="Previous page"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </button>
+                {Array.from({ length: totalPages }, (_, i) => i + 1).map(n => (
+                  <button
+                    key={n}
+                    onClick={() => setPage(n)}
+                    aria-current={n === safePage ? 'page' : undefined}
+                    className={`h-8 w-8 rounded-lg text-xs font-medium tabular-nums transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand ${
+                      n === safePage ? 'cs-primary text-white shadow-sm' : 'hover:bg-slate-100'
+                    }`}
+                  >
+                    {n}
+                  </button>
+                ))}
+                <button
+                  onClick={() => setPage(Math.min(totalPages, safePage + 1))}
+                  disabled={safePage === totalPages}
+                  className="rounded-lg p-1.5 transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand disabled:opacity-40 disabled:hover:bg-transparent"
+                  aria-label="Next page"
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+              </div>
             </div>
           )}
-        </div>
-
-        {filteredGyms.length > 0 && (
-          <div className="mt-6 flex flex-col items-center justify-between gap-3 border-t border-slate-100 pt-4 text-xs text-slate-500 sm:flex-row">
-            <span>
-              Showing {pageStart + 1}-{Math.min(pageStart + PAGE_SIZE, filteredGyms.length)} of {filteredGyms.length}
-            </span>
-            <div className="flex flex-wrap items-center justify-center gap-1">
-              <button
-                onClick={() => setPage(Math.max(1, safePage - 1))}
-                disabled={safePage === 1}
-                className="rounded-lg p-1.5 transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand disabled:opacity-40 disabled:hover:bg-transparent"
-                aria-label="Previous page"
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </button>
-              {Array.from({ length: totalPages }, (_, i) => i + 1).map(n => (
-                <button
-                  key={n}
-                  onClick={() => setPage(n)}
-                  aria-current={n === safePage ? 'page' : undefined}
-                  className={`h-8 w-8 rounded-lg text-xs font-medium tabular-nums transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand ${
-                    n === safePage ? 'cs-primary text-white shadow-sm' : 'hover:bg-slate-100'
-                  }`}
-                >
-                  {n}
-                </button>
-              ))}
-              <button
-                onClick={() => setPage(Math.min(totalPages, safePage + 1))}
-                disabled={safePage === totalPages}
-                className="rounded-lg p-1.5 transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand disabled:opacity-40 disabled:hover:bg-transparent"
-                aria-label="Next page"
-              >
-                <ChevronRight className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-        )}
-      </Card>
+        </Card>
+      )}
 
       {/* Fee modal */}
       <Modal
@@ -1431,7 +1503,7 @@ function AdminDashboard() {
               type="checkbox"
               checked={feeForm.paid}
               onChange={e => setFeeForm(f => ({ ...f, paid: e.target.checked }))}
-              className="h-4 w-4 rounded accent-[#1f6bff]"
+              className="h-4 w-4 rounded accent-brand"
             />
             <span className="text-sm text-slate-700">Paid (the gym has paid)</span>
           </label>

@@ -1,6 +1,6 @@
 'use client'
 
-import { FormEvent, useCallback, useEffect, useState } from 'react'
+import { FormEvent, memo, useCallback, useEffect, useRef, useState } from 'react'
 import { AlertCircle, KeyRound, Loader2, Plus, UserCheck, UserX } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -30,6 +30,64 @@ async function api(method: string, body?: unknown) {
   return json
 }
 
+// Memoized row: typing in the "Add staff" form no longer re-renders every row.
+const StaffTableRow = memo(function StaffTableRow({
+  r,
+  locked,
+  busy,
+  onAct,
+  onReset,
+}: {
+  r: StaffRow
+  locked: boolean
+  busy: boolean
+  onAct: (id: string, body: Record<string, unknown>) => void
+  onReset: (r: StaffRow) => void
+}) {
+  return (
+    <tr className="border-b last:border-0">
+      <td className="p-3 font-medium">{r.full_name || '-'}</td>
+      <td className="p-3 text-gray-600">{r.email}</td>
+      <td className="p-3">
+        {locked ? ROLE_LABEL[r.role] : (
+          <select
+            value={r.role}
+            disabled={busy}
+            onChange={e => onAct(r.id, { action: 'role', role: e.target.value })}
+            className="rounded-md border border-gray-200 bg-white px-2 py-1"
+          >
+            <option value="receptionist">Receptionist</option>
+            <option value="manager">Manager</option>
+          </select>
+        )}
+      </td>
+      <td className="p-3">
+        <span className={r.is_active ? 'text-emerald-700' : 'text-red-600'}>{r.is_active ? 'Active' : 'Disabled'}</span>
+        {r.must_change_password && <span className="ml-2 text-xs text-amber-600">temp password</span>}
+      </td>
+      <td className="p-3 text-right">
+        {!locked && (
+          <div className="flex justify-end gap-2">
+            <Button size="sm" variant="outline" disabled={busy} onClick={() => onReset(r)}>
+              <KeyRound className="mr-1 h-3.5 w-3.5" />Reset password
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy}
+              className={r.is_active ? 'text-red-600' : 'text-emerald-700'}
+              onClick={() => onAct(r.id, { action: r.is_active ? 'deactivate' : 'activate' })}
+            >
+              {r.is_active ? <UserX className="mr-1 h-3.5 w-3.5" /> : <UserCheck className="mr-1 h-3.5 w-3.5" />}
+              {r.is_active ? 'Deactivate' : 'Activate'}
+            </Button>
+          </div>
+        )}
+      </td>
+    </tr>
+  )
+})
+
 export default function StaffPage() {
   const { user } = useUser()
   const [rows, setRows] = useState<StaffRow[]>([])
@@ -38,6 +96,7 @@ export default function StaffPage() {
   const [busy, setBusy] = useState<string | null>(null)
   const [form, setForm] = useState({ full_name: '', email: '', role: 'receptionist', password: '' })
   const [saving, setSaving] = useState(false)
+  const fetched = useRef(false)
 
   const load = useCallback(async () => {
     try {
@@ -51,23 +110,40 @@ export default function StaffPage() {
     }
   }, [])
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void load()
-  }, [load])
+  const role = user?.role
 
-  const act = async (id: string, body: Record<string, unknown>) => {
+  useEffect(() => {
+    // Don't fire the request for users who will see nothing (non-owners).
+    if (role && role !== 'gym_owner') return
+    if (fetched.current) return
+    fetched.current = true
+     
+    void load()
+  }, [role, load])
+
+  // Optimistic update: UI changes instantly, no refetch after success.
+  // If the request fails, we resync from the server and show the error.
+  const act = useCallback(async (id: string, body: Record<string, unknown>) => {
     setBusy(id)
     setError('')
+    setRows(rs => rs.map(r => {
+      if (r.id !== id) return r
+      if (body.action === 'role') return { ...r, role: body.role as StaffRow['role'] }
+      if (body.action === 'deactivate') return { ...r, is_active: false }
+      if (body.action === 'activate') return { ...r, is_active: true }
+      if (body.action === 'reset_password') return { ...r, must_change_password: true }
+      return r
+    }))
     try {
       await api('PATCH', { id, ...body })
-      await load()
     } catch (e) {
-      setError((e as Error).message)
+      const msg = (e as Error).message
+      await load()
+      setError(msg)
     } finally {
       setBusy(null)
     }
-  }
+  }, [load])
 
   const create = async (e: FormEvent) => {
     e.preventDefault()
@@ -76,9 +152,18 @@ export default function StaffPage() {
     if (pw) return setError(pw)
     setSaving(true)
     try {
-      await api('POST', form)
+      const json = await api('POST', form)
+      // Same normalization the server applies (trim + lowercase email).
+      const newRow: StaffRow = {
+        id: json.id,
+        email: form.email.trim().toLowerCase(),
+        full_name: form.full_name.trim(),
+        role: form.role as StaffRow['role'],
+        is_active: true,
+        must_change_password: true,
+      }
+      setRows(rs => [...rs, newRow])
       setForm({ full_name: '', email: '', role: 'receptionist', password: '' })
-      await load()
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -86,10 +171,10 @@ export default function StaffPage() {
     }
   }
 
-  const resetPw = (r: StaffRow) => {
+  const resetPw = useCallback((r: StaffRow) => {
     const p = window.prompt(`New temporary password for ${r.email} (min ${MIN_PASSWORD_LENGTH} characters).\nThey must change it at next login.`)
     if (p) void act(r.id, { action: 'reset_password', password: p })
-  }
+  }, [act])
 
   if (user && user.role !== 'gym_owner') return null
 
@@ -139,51 +224,16 @@ export default function StaffPage() {
                 <tr><th className="p-3">Name</th><th className="p-3">Email</th><th className="p-3">Role</th><th className="p-3">Status</th><th className="p-3 text-right">Actions</th></tr>
               </thead>
               <tbody>
-                {rows.map(r => {
-                  const locked = r.role === 'gym_owner' || r.id === user?.id
-                  return (
-                    <tr key={r.id} className="border-b last:border-0">
-                      <td className="p-3 font-medium">{r.full_name || '-'}</td>
-                      <td className="p-3 text-gray-600">{r.email}</td>
-                      <td className="p-3">
-                        {locked ? ROLE_LABEL[r.role] : (
-                          <select
-                            value={r.role}
-                            disabled={busy === r.id}
-                            onChange={e => void act(r.id, { action: 'role', role: e.target.value })}
-                            className="rounded-md border border-gray-200 bg-white px-2 py-1"
-                          >
-                            <option value="receptionist">Receptionist</option>
-                            <option value="manager">Manager</option>
-                          </select>
-                        )}
-                      </td>
-                      <td className="p-3">
-                        <span className={r.is_active ? 'text-emerald-700' : 'text-red-600'}>{r.is_active ? 'Active' : 'Disabled'}</span>
-                        {r.must_change_password && <span className="ml-2 text-xs text-amber-600">temp password</span>}
-                      </td>
-                      <td className="p-3 text-right">
-                        {!locked && (
-                          <div className="flex justify-end gap-2">
-                            <Button size="sm" variant="outline" disabled={busy === r.id} onClick={() => resetPw(r)}>
-                              <KeyRound className="mr-1 h-3.5 w-3.5" />Reset password
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              disabled={busy === r.id}
-                              className={r.is_active ? 'text-red-600' : 'text-emerald-700'}
-                              onClick={() => void act(r.id, { action: r.is_active ? 'deactivate' : 'activate' })}
-                            >
-                              {r.is_active ? <UserX className="mr-1 h-3.5 w-3.5" /> : <UserCheck className="mr-1 h-3.5 w-3.5" />}
-                              {r.is_active ? 'Deactivate' : 'Activate'}
-                            </Button>
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  )
-                })}
+                {rows.map(r => (
+                  <StaffTableRow
+                    key={r.id}
+                    r={r}
+                    locked={r.role === 'gym_owner' || r.id === user?.id}
+                    busy={busy === r.id}
+                    onAct={act}
+                    onReset={resetPw}
+                  />
+                ))}
               </tbody>
             </table>
           )}

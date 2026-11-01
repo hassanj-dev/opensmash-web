@@ -4,14 +4,15 @@ import { useState } from 'react'
 import Link from 'next/link'
 import Logo from '@/components/Logo'
 import { supabase } from '@/lib/supabase/client'
+import Turnstile, { TURNSTILE_ENABLED } from '@/components/Turnstile'
 import { KeyRound, Mail, Loader2, AlertCircle, MailCheck, ArrowRight, ArrowLeft } from 'lucide-react'
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
     <div className="cs-auth-bg flex min-h-dvh flex-col overflow-hidden text-white">
       <div aria-hidden className="pointer-events-none absolute inset-0 -z-10">
-        <div className="cs-orbit h-[620px] w-[620px] sm:h-[860px] sm:w-[860px]" />
-        <div className="cs-orbit h-[900px] w-[900px] sm:h-[1240px] sm:w-[1240px]" style={{ animationDelay: '-3s' }} />
+        <div className="cs-orbit h-155 w-155 sm:h-215 sm:w-215" />
+        <div className="cs-orbit h-225 w-225 sm:h-310 sm:w-310" style={{ animationDelay: '-3s' }} />
       </div>
       <header className="px-5 pt-5 sm:px-8 sm:pt-7">
         <Logo />
@@ -24,6 +25,8 @@ function Shell({ children }: { children: React.ReactNode }) {
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState('')
   const [loading, setLoading] = useState(false)
+  const [captchaToken, setCaptchaToken] = useState('')
+  const [captchaReset, setCaptchaReset] = useState(0)
   const [error, setError] = useState('')
   const [errorKey, setErrorKey] = useState(0)
   const [sent, setSent] = useState(false)
@@ -35,10 +38,12 @@ export default function ForgotPasswordPage() {
     try {
       const { error: err } = await supabase.auth.resetPasswordForEmail(email.trim(), {
         redirectTo: `${window.location.origin}/auth/reset-password`,
+        captchaToken: captchaToken || undefined,
       })
       if (err) throw err
       setSent(true)
     } catch (err: unknown) {
+      setCaptchaReset(k => k + 1) // a captcha token works only once
       setError((err as Error).message || 'Could not send the reset link. Please try again.')
       setErrorKey(k => k + 1)
     } finally {
@@ -49,7 +54,7 @@ export default function ForgotPasswordPage() {
   if (sent) {
     return (
       <Shell>
-        <div className="cs-card w-full max-w-[420px] rounded-[28px] p-6 text-center sm:p-8">
+        <div className="cs-card w-full max-w-105 rounded-[28px] p-6 text-center sm:p-8">
           <div className="cs-stagger">
             <div className="flex justify-center">
               <div className="cs-tile flex h-14 w-14 items-center justify-center rounded-2xl">
@@ -82,7 +87,7 @@ export default function ForgotPasswordPage() {
 
   return (
     <Shell>
-      <div className="cs-card w-full max-w-[420px] rounded-[28px] p-6 sm:p-8">
+      <div className="cs-card w-full max-w-105 rounded-[28px] p-6 sm:p-8">
         <div className="cs-stagger">
           <div className="flex justify-center">
             <div className="cs-tile flex h-12 w-12 items-center justify-center rounded-2xl">
@@ -92,7 +97,7 @@ export default function ForgotPasswordPage() {
 
           <div className="mt-5 text-center">
             <h1 className="text-[22px] font-semibold tracking-tight sm:text-2xl">Forgot your password?</h1>
-            <p className="mx-auto mt-1.5 max-w-[300px] text-sm leading-relaxed text-white/55">
+            <p className="mx-auto mt-1.5 max-w-75 text-sm leading-relaxed text-white/55">
               Enter your email and we will send you a link to choose a new one.
             </p>
           </div>
@@ -124,10 +129,12 @@ export default function ForgotPasswordPage() {
               />
             </label>
 
+            {TURNSTILE_ENABLED && <Turnstile onToken={setCaptchaToken} resetKey={captchaReset} />}
+
             <button
               type="submit"
-              disabled={loading}
-              className="cs-btn flex h-12 w-full items-center justify-center gap-2 rounded-2xl text-[15px] font-medium text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3d84ff] focus-visible:ring-offset-2 focus-visible:ring-offset-[#0b0f1c] disabled:cursor-not-allowed disabled:opacity-70"
+              disabled={loading || (TURNSTILE_ENABLED && !captchaToken)}
+              className="cs-btn flex h-12 w-full items-center justify-center gap-2 rounded-2xl text-[15px] font-medium text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-light focus-visible:ring-offset-2 focus-visible:ring-offset-[#0b0f1c] disabled:cursor-not-allowed disabled:opacity-70"
             >
               {loading ? (
                 <>

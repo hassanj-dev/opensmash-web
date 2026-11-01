@@ -349,6 +349,8 @@ export default function MembersPage() {
         member.code.toLowerCase().includes(q)
       )
     })
+    // `today` is kept on purpose: it re-runs the filter when the Pakistan date changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [members, search, statusFilter, today])
 
   // If the last page becomes empty (delete / filter), fall back to the last page that exists
@@ -990,7 +992,7 @@ export default function MembersPage() {
 
       {/* Add / Edit modal */}
       {formOpen && createPortal(
-        <div className="fixed inset-0 z-[60] flex items-center justify-center overflow-y-auto bg-gray-900/50 p-4">
+        <div className="fixed inset-0 z-60 flex items-center justify-center overflow-y-auto bg-gray-900/50 p-4">
           <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-lg font-bold text-gray-900">
@@ -1179,7 +1181,7 @@ export default function MembersPage() {
 
       {/* Renew modal */}
       {renewTarget && createPortal(
-        <div className="fixed inset-0 z-[60] flex items-center justify-center overflow-y-auto bg-gray-900/50 p-4">
+        <div className="fixed inset-0 z-60 flex items-center justify-center overflow-y-auto bg-gray-900/50 p-4">
           <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-lg font-bold text-gray-900">Renew Membership</h2>
@@ -1281,7 +1283,7 @@ export default function MembersPage() {
 
       {/* Delete confirm modal */}
       {deleteTarget && createPortal(
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-gray-900/50 p-4">
+        <div className="fixed inset-0 z-60 flex items-center justify-center bg-gray-900/50 p-4">
           <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
             <div className="mb-3 flex items-center gap-2">
               <AlertTriangle className="w-5 h-5 text-red-600" />

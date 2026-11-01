@@ -7,7 +7,7 @@ const rawUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://opensmash-web.vercel
 export const siteConfig = {
   name: 'OpenSmash',
   url: rawUrl.replace(/\/+$/, ''), // never a trailing slash
-  title: 'OpenSmash - Gym Management Software',
+  title: 'OpenSmash - Gym Management System',
   description:
     'Run your gym from one place: members, attendance, payments and reports, synced with the OpenSmash desktop app.',
   keywords: [

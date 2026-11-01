@@ -211,6 +211,40 @@ function DesktopCard({ p }: { p: PlatformInfo }) {
   )
 }
 
+// Shown instead of DesktopCard when a platform has no download link yet.
+function ComingSoonCard({ p }: { p: PlatformInfo }) {
+  return (
+    <article className={cardClass}>
+      <div className="flex flex-1 flex-col p-5">
+        <header className="flex items-center gap-4">
+          <span className={iconTileClass}>
+            <p.icon className="h-6 w-6" aria-hidden="true" />
+          </span>
+          <div className="min-w-0">
+            <h3 className="text-lg font-semibold tracking-tight text-slate-900">{p.label}</h3>
+            <p className="text-sm text-slate-500">{p.platform}</p>
+          </div>
+        </header>
+
+        <p className="mt-5 text-sm leading-relaxed text-slate-500">
+          The {p.label} app is coming soon. The download will appear here when it is ready.
+        </p>
+
+        <div className="mt-auto pt-5">
+          <button
+            type="button"
+            disabled
+            aria-disabled="true"
+            className={`${buttonBase} cursor-not-allowed border border-slate-200 bg-slate-100 text-slate-400`}
+          >
+            Coming soon
+          </button>
+        </div>
+      </div>
+    </article>
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Mobile (web app installs, nothing is downloaded)
 // ---------------------------------------------------------------------------
@@ -524,9 +558,13 @@ export default function DownloadPage() {
             />
           ) : (
             <div className="grid gap-5 sm:grid-cols-2">
-              {availablePlatforms.map((p) => (
-                <DesktopCard key={p.key} p={p} />
-              ))}
+              {platforms.map((p) =>
+                p.ready ? (
+                  <DesktopCard key={p.key} p={p} />
+                ) : (
+                  <ComingSoonCard key={p.key} p={p} />
+                ),
+              )}
             </div>
           )}
         </section>

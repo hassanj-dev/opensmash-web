@@ -39,6 +39,14 @@ export async function proxy(req: NextRequest) {
 
   const path = req.nextUrl.pathname
 
+  // API callers need JSON, not a redirect to an HTML page
+  const isApi = path.startsWith('/api/')
+  const apiError = (message: string, status: number) => {
+    const r = NextResponse.json({ error: message }, { status })
+    res.cookies.getAll().forEach(c => r.cookies.set(c))
+    return r
+  }
+
   // Public routes (login na ho tab bhi khuli)
   const publicRoutes = ['/auth/login', '/auth/signup', '/auth/forgot-password', '/auth/reset-password']
   const isPublicRoute = publicRoutes.some(route => path.startsWith(route))
@@ -49,6 +57,8 @@ export async function proxy(req: NextRequest) {
   // Reset-password par logged-in user ko rokna nahi (recovery link session banata hai,
   // aur must_change_password wale staff ko yahin password badalna hai)
   const isResetRoute = path.startsWith('/auth/reset-password')
+
+  if (!authUser && isApi) return apiError('Not signed in.', 401)
 
   // Login nahi aur protected page => login par bhejo (front page is open to visitors)
   if (!authUser && !isPublicRoute && !isLanding) return redirectTo('/auth/login')
@@ -69,12 +79,14 @@ export async function proxy(req: NextRequest) {
     // (Must sign out, otherwise /auth/login would bounce them back to /dashboard.)
     if (!profile || profile.is_active === false) {
       await supabase.auth.signOut({ scope: 'local' })
+      if (isApi) return apiError('This account is disabled.', 403)
       return redirectTo('/auth/login?error=account_disabled')
     }
 
     // Staff with a temporary password must set their own before using the app.
     // /auth/reset-password is a public route, so this cannot loop.
     if (profile.must_change_password === true) {
+      if (isApi) return apiError('Password change required.', 403)
       return redirectTo('/auth/reset-password')
     }
 
@@ -98,7 +110,10 @@ export async function proxy(req: NextRequest) {
 
       const gate = profile.gym_id ? gymGate(gym?.status, gym?.expires_at) : '/suspended'
 
-      if (gate && !path.startsWith(gate)) return redirectTo(gate)
+      if (gate && !path.startsWith(gate)) {
+        if (isApi) return apiError('This gym is not active.', 403)
+        return redirectTo(gate)
+      }
 
       // Active gym that wanders onto a status page goes back to the app
       if (!gate && ['/pending', '/suspended', '/expired'].some(p => path.startsWith(p))) {

@@ -44,7 +44,9 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
         if (authUser) {
           const { data: userData } = await supabase
             .from('users')
-            .select('*, gyms(name, currency)')
+            .select(
+              'id, gym_id, email, full_name, role, is_active, must_change_password, avatar_url, created_at, updated_at, gyms(name, currency)'
+            )
             .eq('id', authUser.id)
             .single()
 

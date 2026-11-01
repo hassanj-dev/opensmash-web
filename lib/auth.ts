@@ -12,7 +12,9 @@ export async function getCurrentUser(): Promise<User | null> {
 
     const { data: user, error } = await supabase
       .from('users')
-      .select('*')
+      .select(
+        'id, gym_id, email, full_name, role, is_active, must_change_password, avatar_url, created_at, updated_at'
+      )
       .eq('id', authUser.id)
       .single()
 
@@ -56,10 +58,11 @@ export function hasPermission(userRole: UserRole, requiredRole: UserRole): boole
   return roleHierarchy[userRole] >= roleHierarchy[requiredRole]
 }
 
-export async function signIn(email: string, password: string) {
+export async function signIn(email: string, password: string, captchaToken?: string) {
   const { data, error } = await supabase.auth.signInWithPassword({
     email,
     password,
+    options: { captchaToken },
   })
 
   if (error) {
@@ -91,7 +94,13 @@ export async function signIn(email: string, password: string) {
 }
 
 // Gym, user profile aur default plans database trigger (handle_new_user) khud banata hai.
-export async function signUp(email: string, password: string, fullName: string, gymName: string) {
+export async function signUp(
+  email: string,
+  password: string,
+  fullName: string,
+  gymName: string,
+  captchaToken?: string
+) {
   const passwordError = validatePassword(password)
   if (passwordError) throw new Error(passwordError)
 
@@ -100,6 +109,7 @@ export async function signUp(email: string, password: string, fullName: string, 
     password,
     options: {
       data: { full_name: fullName, gym_name: gymName },
+      captchaToken,
       // Confirmation link lands on the login page of THIS site (add it in Supabase > URL Configuration > Redirect URLs)
       emailRedirectTo: `${window.location.origin}/auth/login`,
     },
@@ -125,10 +135,11 @@ export async function signOut() {
   if (error && error.name !== 'AuthSessionMissingError') throw error
 }
 
-export async function resetPassword(email: string) {
+export async function resetPassword(email: string, captchaToken?: string) {
   // This URL must be listed in Supabase: Authentication > URL Configuration > Redirect URLs
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
     redirectTo: `${window.location.origin}/auth/reset-password`,
+    captchaToken,
   })
   if (error) throw error
 }
